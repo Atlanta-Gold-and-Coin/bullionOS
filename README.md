@@ -213,16 +213,55 @@ pnpm db:rollback   # reverts the most recent
 
 ## Deployment
 
-`render.yaml` provisions the full stack in one blueprint: API (Docker), Postgres 16, Redis 7. `apps/web/vercel.json` deploys the Next.js frontend and rewrites `/api/*` to the Render host.
+Two supported paths — pick one host for the API. Frontend stays on Vercel either way.
 
-One-time:
-1. Push this repo to GitHub.
-2. Render → New → Blueprint → point at the repo → fill the `sync: false` env prompts (`API_BASE_URL`, `WEB_ORIGIN`, `METALS_API_KEY`, `APP_ENCRYPTION_KEY`, `SMTP_*`, `TWILIO_*`).
-3. Vercel → Import → set root to `apps/web` → deploy.
-4. Edit `WEB_ORIGIN` in Render to match your real Vercel URL (CORS depends on this).
-5. Run migrations in the Render shell: `pnpm --filter @agc/api db:migrate`.
+### Option A — Railway (recommended)
 
-Post-deploy:
+`railway.json` at the repo root tells Railway to build from `apps/api/Dockerfile` with the repo as the build context, health-check `/api/v1/health`, and restart on failure.
+
+1. Push to GitHub.
+2. **railway.app → New Project → Deploy from GitHub repo → pick `AGCstore/agc-crm`.**
+3. In that project:
+   - **+ New → Database → PostgreSQL.** Railway auto-injects `DATABASE_URL`.
+   - **+ New → Database → Redis.** Auto-injects `REDIS_URL`.
+4. On the API service → **Variables**, paste these (values from your local `.env` or fresh):
+   ```
+   NODE_ENV=production
+   PORT=4000
+   API_BASE_URL=https://<the-railway-public-url>
+   WEB_ORIGIN=https://<your-vercel-app>.vercel.app
+   JWT_ACCESS_SECRET=<openssl rand -base64 64>
+   JWT_REFRESH_SECRET=<openssl rand -base64 64>
+   APP_ENCRYPTION_KEY=<node -e "..." 32-byte base64>
+   METALS_API_KEY=<from metals.dev>
+   METALS_API_URL=https://api.metals.dev/v1/latest
+   ```
+   SMTP_* and TWILIO_* stay blank if you want dev-log fallback.
+5. **Networking → Generate Domain** on the API service to get the public URL, then fill it into `API_BASE_URL`.
+6. Run migrations once: **API service → Settings → Deploy → Pre-deploy command** set to
+   ```
+   pnpm --filter @agc/api db:migrate
+   ```
+   (or run it one-off in the service shell, then remove the command).
+7. Vercel → Import → root directory `apps/web`. Edit `apps/web/vercel.json` before deploy:
+   ```json
+   { "rewrites": [{ "source": "/api/:path*", "destination": "https://<railway-url>/api/:path*" }] }
+   ```
+8. After Vercel deploys, copy its URL back into Railway's `WEB_ORIGIN` — CORS depends on it matching exactly.
+
+### Option B — Render
+
+`render.yaml` is a one-command blueprint that provisions API (Docker) + Postgres 16 + Redis 7 together.
+
+1. Push to GitHub.
+2. Render → New → **Blueprint** → point at the repo.
+3. Fill the `sync: false` env prompts (`API_BASE_URL`, `WEB_ORIGIN`, `METALS_API_KEY`, `APP_ENCRYPTION_KEY`, `SMTP_*`, `TWILIO_*`).
+4. Vercel → Import → root `apps/web` (same as Railway path).
+5. Edit `WEB_ORIGIN` in Render to match your real Vercel URL.
+6. Run migrations in the Render shell: `pnpm --filter @agc/api db:migrate`.
+
+### Post-deploy (both paths)
+
 - Rotate the seeded admin password at `/admin/settings`, or delete the seed user.
 - Enable 2FA on the admin account at `/dashboard/security`.
 - Configure each integration at `/admin/integrations`.
