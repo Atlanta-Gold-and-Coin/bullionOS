@@ -49,12 +49,16 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=4000
 
-# Copy compiled JS + prod node_modules.
-COPY --from=build       --chown=agc:agc /repo/apps/api/dist       ./dist
-COPY --from=prod-deps   --chown=agc:agc /repo/node_modules         ./node_modules
-COPY --from=prod-deps   --chown=agc:agc /repo/apps/api/node_modules ./apps/api/node_modules
-COPY --from=prod-deps   --chown=agc:agc /repo/packages             ./packages
-COPY --from=build       --chown=agc:agc /repo/apps/api/package.json ./package.json
+# Mirror the repo layout so Node's module resolution finds every dep.
+# pnpm workspaces store api-specific modules in apps/api/node_modules with
+# symlinks back to the root .pnpm store; if dist/main.js doesn't live
+# INSIDE apps/api, Node walks up from /app/dist → /app and never sees the
+# api's own node_modules. Keeping the workspace shape avoids that.
+COPY --from=prod-deps   --chown=agc:agc /repo/node_modules                  ./node_modules
+COPY --from=prod-deps   --chown=agc:agc /repo/packages                      ./packages
+COPY --from=prod-deps   --chown=agc:agc /repo/apps/api/node_modules         ./apps/api/node_modules
+COPY --from=prod-deps   --chown=agc:agc /repo/apps/api/package.json         ./apps/api/package.json
+COPY --from=build       --chown=agc:agc /repo/apps/api/dist                 ./apps/api/dist
 
 # Uploads dir must be writable by the non-root user. Persistence is the
 # host's responsibility — declare a volume mount in your platform:
@@ -65,6 +69,7 @@ COPY --from=build       --chown=agc:agc /repo/apps/api/package.json ./package.js
 # it and Compose/Render both configure persistence externally anyway.
 RUN mkdir -p /app/uploads
 
+WORKDIR /app/apps/api
 EXPOSE 4000
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]
