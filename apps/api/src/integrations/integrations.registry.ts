@@ -61,7 +61,9 @@ const googleCalendarCreds = z.object({
   // Sales@... primary calendar by default.
   calendar_id: z.string().min(1).max(400).default('primary'),
   // Populated by the OAuth callback after the one-time user consent.
-  refresh_token: z.string().min(10).max(1000).default(''),
+  // Empty string until the admin clicks "Authorize with Google" — that's
+  // the expected first-save state, so no length minimum here.
+  refresh_token: z.string().max(1000).default(''),
   // IANA tz — matters because Google expects RFC3339 w/ tz and the shop
   // operates in America/New_York.
   timezone: z.string().min(3).max(64).default('America/New_York'),
