@@ -1,4 +1,4 @@
-import { Global, Module } from '@nestjs/common';
+import { forwardRef, Global, Module } from '@nestjs/common';
 import { EasyPostAdapter } from './adapters/easypost.adapter';
 import { FedexAdapter } from './adapters/fedex.adapter';
 import { UpsAdapter } from './adapters/ups.adapter';
@@ -10,6 +10,7 @@ import { IntegrationsService } from './integrations.service';
 import { ShipmentIngestService } from './shipment-ingest.service';
 import { CarrierWebhooksController } from './webhooks.controller';
 import { MetalsModule } from '../metals/metals.module';
+import { CalendarModule } from '../calendar/calendar.module';
 
 // Global: many feature modules will inject CarrierService/DocuSignService.
 // Imports MetalsModule because IntegrationsController needs MetalsService
@@ -18,7 +19,10 @@ import { MetalsModule } from '../metals/metals.module';
 // module's @Global export.
 @Global()
 @Module({
-  imports: [MetalsModule],
+  // forwardRef breaks the cycle: CalendarModule imports this one to read
+  // integration credentials, and this controller needs CalendarService for
+  // the per-provider "Test connection" button.
+  imports: [MetalsModule, forwardRef(() => CalendarModule)],
   controllers: [IntegrationsController, CarrierWebhooksController],
   providers: [
     IntegrationsService,

@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
 
 interface IntegrationStatus {
-  provider: 'ups' | 'fedex' | 'usps' | 'docusign' | 'metals';
+  provider: 'ups' | 'fedex' | 'usps' | 'docusign' | 'metals' | 'google_calendar';
   label: string;
   configured: boolean;
   enabled: boolean;
@@ -60,6 +60,46 @@ const FIELDS: Record<
   metals: [
     { name: 'api_key', label: 'metals.dev API key', secret: true, placeholder: 'from https://metals.dev' },
     { name: 'url', label: 'API URL', placeholder: 'https://api.metals.dev/v1/latest' },
+  ],
+  google_calendar: [
+    {
+      name: 'client_id',
+      label: 'OAuth Client ID',
+      placeholder: '…apps.googleusercontent.com',
+    },
+    { name: 'client_secret', label: 'OAuth Client Secret', secret: true },
+    {
+      name: 'calendar_id',
+      label: 'Calendar ID',
+      placeholder: 'primary (or a specific calendar id)',
+    },
+    {
+      name: 'timezone',
+      label: 'Timezone (IANA)',
+      placeholder: 'America/New_York',
+    },
+    {
+      name: 'booking_window_days',
+      label: 'Booking window (days ahead)',
+      placeholder: '30',
+    },
+    {
+      name: 'slot_minutes',
+      label: 'Slot size (minutes)',
+      placeholder: '30',
+    },
+    { name: 'hours_mon', label: 'Mon hours', placeholder: '10:00-17:00' },
+    { name: 'hours_tue', label: 'Tue hours', placeholder: '10:00-17:00' },
+    { name: 'hours_wed', label: 'Wed hours', placeholder: '10:00-17:00' },
+    { name: 'hours_thu', label: 'Thu hours', placeholder: '10:00-17:00' },
+    { name: 'hours_fri', label: 'Fri hours', placeholder: '10:00-17:00' },
+    { name: 'hours_sat', label: 'Sat hours', placeholder: 'blank = closed' },
+    { name: 'hours_sun', label: 'Sun hours', placeholder: 'blank = closed' },
+    {
+      name: 'services',
+      label: 'Services (semicolon-separated)',
+      placeholder: 'Buy consultation;Sell consultation;Appraisal',
+    },
   ],
 };
 
@@ -207,7 +247,10 @@ function ProviderCard({ status }: { status: IntegrationStatus }) {
 
       {editing && (
         <div className="mt-3 space-y-3">
-          {fields.map((f) => (
+          {fields
+            // refresh_token comes from the OAuth callback, not the form.
+            .filter((f) => f.name !== 'refresh_token')
+            .map((f) => (
             <label key={f.name} className="block">
               <span className="text-[11px] font-medium uppercase tracking-wide text-ink-500">
                 {f.label}
@@ -257,6 +300,15 @@ function ProviderCard({ status }: { status: IntegrationStatus }) {
         >
           {msg.text}
         </div>
+      )}
+
+      {status.provider === 'google_calendar' && status.configured && (
+        <GoogleCalendarActions
+          authorized={Boolean(
+            status.redacted_credentials?.refresh_token &&
+              status.redacted_credentials.refresh_token !== '—',
+          )}
+        />
       )}
 
       <div className="mt-4 flex flex-wrap justify-end gap-2">
@@ -316,6 +368,63 @@ function ProviderCard({ status }: { status: IntegrationStatus }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Google Calendar OAuth kickoff. The authorize endpoint returns the
+ * consent URL and the registered redirect_uri — we show both so the
+ * admin can copy the redirect into the Google Cloud Console.
+ */
+function GoogleCalendarActions({ authorized }: { authorized: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [redirect, setRedirect] = useState<string | null>(null);
+
+  async function kickoff() {
+    setErr(null);
+    setBusy(true);
+    try {
+      const r = await apiFetch<{ url: string; redirect_uri: string }>(
+        `/admin/integrations/google_calendar/authorize?return_to=${encodeURIComponent(
+          '/admin/integrations',
+        )}`,
+      );
+      setRedirect(r.redirect_uri);
+      window.location.href = r.url;
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Authorize failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-ink-100 bg-ink-50/40 p-3 text-xs">
+      <p className="text-ink-600">
+        {authorized
+          ? 'Authorized. Re-run if you need to switch the Sales mailbox or re-grant scope.'
+          : 'Save the client id + secret above, then click below to authorize as the Sales mailbox.'}
+      </p>
+      <p className="mt-1 text-[11px] text-ink-400">
+        Google Cloud Console redirect URI must include this exact path:
+        <code className="ml-1 block break-all bg-white px-2 py-1 font-mono text-[10px]">
+          {redirect ?? `${window.location.origin}/api/v1/admin/integrations/google_calendar/callback`}
+        </code>
+      </p>
+      <button
+        onClick={kickoff}
+        disabled={busy}
+        className="mt-2 rounded-md bg-ink-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-ink-800 disabled:opacity-60"
+      >
+        {busy ? 'Opening Google…' : authorized ? 'Re-authorize with Google' : 'Authorize with Google'}
+      </button>
+      {err && (
+        <div role="alert" className="mt-2 rounded-md bg-red-50 px-3 py-2 text-[11px] text-red-700">
+          {err}
+        </div>
+      )}
     </div>
   );
 }

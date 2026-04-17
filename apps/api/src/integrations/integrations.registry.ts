@@ -38,6 +38,55 @@ const metalsCreds = z.object({
   url: z.string().url().default('https://api.metals.dev/v1/latest'),
 });
 
+/**
+ * Google Calendar OAuth2 credentials for the public booking flow.
+ *
+ * Setup (one-time, by an admin):
+ *   1. In Google Cloud Console, create an OAuth 2.0 Web Application client.
+ *   2. Add the redirect URI shown in the admin UI.
+ *   3. Paste client_id + client_secret here.
+ *   4. Click "Authorize with Google" — the flow signs in as the Sales
+ *      mailbox and returns a refresh_token we persist to this row.
+ *   5. Set calendar_id to the target calendar (usually 'primary' for the
+ *      Sales mailbox).
+ *
+ * The refresh_token is the one credential we *can't* let the admin paste
+ * in raw — it has to come from Google's OAuth server. The admin UI will
+ * call the PUT endpoint with the full object after the OAuth exchange
+ * completes.
+ */
+const googleCalendarCreds = z.object({
+  client_id: z.string().min(20).max(400),
+  client_secret: z.string().min(20).max(400),
+  // Sales@... primary calendar by default.
+  calendar_id: z.string().min(1).max(400).default('primary'),
+  // Populated by the OAuth callback after the one-time user consent.
+  refresh_token: z.string().min(10).max(1000).default(''),
+  // IANA tz — matters because Google expects RFC3339 w/ tz and the shop
+  // operates in America/New_York.
+  timezone: z.string().min(3).max(64).default('America/New_York'),
+  // Booking window in days from today. 30 is a sensible default for a
+  // walk-in business; weddings and appraisals can be longer.
+  booking_window_days: z.coerce.number().int().min(1).max(180).default(30),
+  // Appointment slot length in minutes.
+  slot_minutes: z.coerce.number().int().min(10).max(240).default(30),
+  // Business hours, 24h clock. One range per weekday, Monday = 1.
+  // Value '' means closed that day.
+  hours_mon: z.string().max(32).default('10:00-17:00'),
+  hours_tue: z.string().max(32).default('10:00-17:00'),
+  hours_wed: z.string().max(32).default('10:00-17:00'),
+  hours_thu: z.string().max(32).default('10:00-17:00'),
+  hours_fri: z.string().max(32).default('10:00-17:00'),
+  hours_sat: z.string().max(32).default(''),
+  hours_sun: z.string().max(32).default(''),
+  // Semicolon-separated human-readable service names the public form
+  // offers. E.g. "Buy consultation;Sell consultation;Appraisal".
+  services: z
+    .string()
+    .max(500)
+    .default('Buy consultation;Sell consultation;Appraisal'),
+});
+
 const docusignCreds = z.object({
   integration_key: z.string().min(20).max(100),
   account_id: z.string().min(20).max(100),
@@ -86,6 +135,13 @@ export const PROVIDERS = {
     secretFields: ['api_key'] as const,
     hint: (c: z.infer<typeof metalsCreds>) =>
       `key ${maskId(c.api_key)} · ${new URL(c.url).host}`,
+  },
+  google_calendar: {
+    label: 'Google Calendar (Booking)',
+    schema: googleCalendarCreds,
+    secretFields: ['client_secret', 'refresh_token'] as const,
+    hint: (c: z.infer<typeof googleCalendarCreds>) =>
+      `${c.calendar_id} · ${c.refresh_token ? 'authorized' : 'not authorized'}`,
   },
 } as const;
 

@@ -3,13 +3,16 @@ import {
   Body,
   Controller,
   Delete,
+  forwardRef,
   Get,
   HttpCode,
+  Inject,
   Param,
   Patch,
   Post,
   Put,
 } from '@nestjs/common';
+import { CalendarService } from '../calendar/calendar.service';
 import { CurrentUser, type RequestUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import type { ShipmentCarrier } from '../db/types';
@@ -32,6 +35,8 @@ export class IntegrationsController {
     private readonly carrier: CarrierService,
     private readonly docusign: DocuSignService,
     private readonly metals: MetalsService,
+    @Inject(forwardRef(() => CalendarService))
+    private readonly calendar: CalendarService,
   ) {}
 
   @Get()
@@ -76,6 +81,8 @@ export class IntegrationsController {
       result = await this.docusign.testConnection();
     } else if (provider === 'metals') {
       result = await this.metals.testConnection();
+    } else if (provider === 'google_calendar') {
+      result = await this.calendar.testConnection();
     } else {
       result = await this.carrier.testConnection(provider as ShipmentCarrier);
     }

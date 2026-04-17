@@ -99,6 +99,12 @@ export default function LoginPage() {
             Create an account
           </Link>
         </p>
+        <p className="mt-2 text-center text-sm text-ink-400">
+          Want to book an appointment?{' '}
+          <Link href="/book" className="text-ink-900 underline-offset-2 hover:underline">
+            Schedule online
+          </Link>
+        </p>
       </div>
     </main>
   );
