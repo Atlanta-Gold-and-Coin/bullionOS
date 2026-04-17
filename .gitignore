@@ -34,7 +34,3 @@ Thumbs.db
 apps/api/uploads/
 /tmp/
 
-# source data dropped at repo root — excluded until reviewed
-/agc products.xlsx
-/agc products.xlsx.csv
-
