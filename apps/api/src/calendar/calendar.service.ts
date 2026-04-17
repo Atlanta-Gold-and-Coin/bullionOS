@@ -185,6 +185,125 @@ export class CalendarService {
     return { slots, timezone: creds.timezone };
   }
 
+  /**
+   * Admin-initiated event creation. Unlike createBooking, this bypasses
+   * the services whitelist and the business-hours window — operators
+   * can block any time slot for any reason (coin show, out of office,
+   * private appointment with a VIP).
+   *
+   * Still uses the same credentials + target calendar as the public
+   * booking flow, so admin-created events share the queue with public
+   * bookings and slot availability is consistent across both surfaces.
+   */
+  async createAdminEvent(args: {
+    title: string;
+    startIso: string;
+    endIso: string;
+    location?: string;
+    description?: string;
+    attendees?: Array<{ email: string; name?: string }>;
+    sendUpdates?: 'all' | 'externalOnly' | 'none';
+  }): Promise<{ eventId: string; htmlLink: string | null }> {
+    const creds = await this.requireReadyCreds();
+    const calendar = this.calendar(creds);
+
+    const start = new Date(args.startIso);
+    const end = new Date(args.endIso);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new BadRequestException('Invalid start/end');
+    }
+    if (end <= start) {
+      throw new BadRequestException('End must be after start');
+    }
+
+    const event: calendar_v3.Schema$Event = {
+      summary: args.title,
+      description: args.description ?? undefined,
+      location: args.location ?? undefined,
+      start: { dateTime: start.toISOString(), timeZone: creds.timezone },
+      end: { dateTime: end.toISOString(), timeZone: creds.timezone },
+      attendees: args.attendees?.length
+        ? args.attendees.map((a) => ({ email: a.email, displayName: a.name }))
+        : undefined,
+      reminders: {
+        useDefault: false,
+        overrides: [
+          { method: 'email', minutes: 60 * 24 },
+          { method: 'popup', minutes: 30 },
+        ],
+      },
+    };
+
+    const res = await calendar.events.insert({
+      calendarId: creds.calendar_id,
+      requestBody: event,
+      // 'all' emails everyone; 'externalOnly' skips the Sales mailbox
+      // itself; 'none' creates silently. Default 'all' for the normal
+      // "book with this client" UX; 'none' is useful for OoO blocks.
+      sendUpdates: args.sendUpdates ?? 'all',
+    });
+    return { eventId: res.data.id ?? '', htmlLink: res.data.htmlLink ?? null };
+  }
+
+  /**
+   * List events on the target calendar between two ISO instants,
+   * ordered by start. Used by the /admin/calendar agenda view. Caps at
+   * 250 per call — anything more and the UI should paginate. Maps to a
+   * lean row shape rather than returning the whole Google payload.
+   */
+  async listEvents(
+    timeMinIso: string,
+    timeMaxIso: string,
+  ): Promise<
+    Array<{
+      id: string;
+      summary: string;
+      location: string | null;
+      htmlLink: string | null;
+      start: string;
+      end: string;
+      attendees: Array<{ email: string; name: string | null; responseStatus: string | null }>;
+      status: string;
+    }>
+  > {
+    const creds = await this.requireReadyCreds();
+    const calendar = this.calendar(creds);
+    const res = await calendar.events.list({
+      calendarId: creds.calendar_id,
+      timeMin: timeMinIso,
+      timeMax: timeMaxIso,
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
+    });
+    return (res.data.items ?? []).map((ev) => ({
+      id: ev.id ?? '',
+      summary: ev.summary ?? '(no title)',
+      location: ev.location ?? null,
+      htmlLink: ev.htmlLink ?? null,
+      start: (ev.start?.dateTime ?? ev.start?.date) ?? '',
+      end: (ev.end?.dateTime ?? ev.end?.date) ?? '',
+      status: ev.status ?? 'confirmed',
+      attendees:
+        ev.attendees?.map((a) => ({
+          email: a.email ?? '',
+          name: a.displayName ?? null,
+          responseStatus: a.responseStatus ?? null,
+        })) ?? [],
+    }));
+  }
+
+  /** Admin: cancel an event on the target calendar. */
+  async cancelEvent(eventId: string, sendUpdates: 'all' | 'none' = 'all'): Promise<void> {
+    const creds = await this.requireReadyCreds();
+    const calendar = this.calendar(creds);
+    await calendar.events.delete({
+      calendarId: creds.calendar_id,
+      eventId,
+      sendUpdates,
+    });
+  }
+
   async createBooking(req: BookingRequest): Promise<{ eventId: string; htmlLink: string | null }> {
     const creds = await this.requireReadyCreds();
     const calendar = this.calendar(creds);

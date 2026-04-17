@@ -2,7 +2,10 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  Param,
   Post,
   Query,
   Req,
@@ -10,13 +13,18 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { randomBytes } from 'node:crypto';
+import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsEmail,
+  IsIn,
   IsISO8601,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 import type { Request } from 'express';
 import { Public } from '../common/decorators/public.decorator';
@@ -25,6 +33,52 @@ import { CurrentUser, type RequestUser } from '../common/decorators/current-user
 import { IntegrationsService } from '../integrations/integrations.service';
 import type { CredentialsFor } from '../integrations/integrations.registry';
 import { CalendarService } from './calendar.service';
+
+class EventAttendeeDto {
+  @IsEmail()
+  @MaxLength(254)
+  email!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  name?: string;
+}
+
+class CreateAdminEventDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  title!: string;
+
+  @IsISO8601()
+  start!: string;
+
+  @IsISO8601()
+  end!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  location?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  description?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(25)
+  @ValidateNested({ each: true })
+  @Type(() => EventAttendeeDto)
+  attendees?: EventAttendeeDto[];
+
+  /** 'all' (default) emails attendees; 'none' creates silently (OoO block). */
+  @IsOptional()
+  @IsIn(['all', 'externalOnly', 'none'])
+  sendUpdates?: 'all' | 'externalOnly' | 'none';
+}
 
 class CreateBookingDto {
   @IsString()
@@ -129,6 +183,55 @@ export class CalendarController {
       notes: dto.notes?.trim(),
     });
     return { ok: true, eventId: r.eventId, htmlLink: r.htmlLink };
+  }
+
+  // ---------- Admin event CRUD ----------
+
+  /**
+   * List events on the Sales calendar between two ISO instants. Defaults
+   * to now → 30 days out. Used by /admin/calendar agenda view.
+   */
+  @Get('admin/calendar/events')
+  @Roles('admin', 'staff')
+  async adminListEvents(
+    @Query('from') fromRaw?: string,
+    @Query('to') toRaw?: string,
+  ) {
+    const now = new Date();
+    const from = fromRaw ?? now.toISOString();
+    const to = toRaw ?? new Date(now.getTime() + 30 * 24 * 3600 * 1000).toISOString();
+    return {
+      events: await this.calendar.listEvents(from, to),
+    };
+  }
+
+  @Post('admin/calendar/events')
+  @Roles('admin', 'staff')
+  async adminCreateEvent(@Body() dto: CreateAdminEventDto) {
+    const r = await this.calendar.createAdminEvent({
+      title: dto.title.trim(),
+      startIso: dto.start,
+      endIso: dto.end,
+      location: dto.location?.trim(),
+      description: dto.description?.trim(),
+      attendees: dto.attendees?.map((a) => ({
+        email: a.email.trim().toLowerCase(),
+        name: a.name?.trim(),
+      })),
+      sendUpdates: dto.sendUpdates,
+    });
+    return { ok: true, eventId: r.eventId, htmlLink: r.htmlLink };
+  }
+
+  @Delete('admin/calendar/events/:id')
+  @Roles('admin', 'staff')
+  @HttpCode(204)
+  async adminCancelEvent(
+    @Param('id') id: string,
+    @Query('notify') notify?: string,
+  ) {
+    const sendUpdates = notify === 'false' ? 'none' : 'all';
+    await this.calendar.cancelEvent(id, sendUpdates);
   }
 
   // ---------- Admin OAuth flow ----------

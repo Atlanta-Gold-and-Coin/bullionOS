@@ -47,6 +47,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <nav className="mt-8 flex flex-col gap-1 text-sm">
           <NavLink href="/admin">Dashboard</NavLink>
           <NavLink href="/admin/kpi">KPI</NavLink>
+          <NavLink href="/admin/calendar">Calendar</NavLink>
           <NavLink href="/admin/invoices">Invoices</NavLink>
           <NavLink href="/admin/invoices/new">New invoice</NavLink>
           <NavLink href="/admin/clients">Clients</NavLink>
