@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
 import { PageTint } from '@/components/page-tint';
+import { ProductCombobox } from '@/components/product-combobox';
 
 interface Client {
   id: string;
@@ -376,10 +377,6 @@ function TypeToggle({
   );
 }
 
-// Sentinel in the product select for "ad-hoc / scrap / one-off piece".
-// Picking it clears the row's product_id and shows the custom-name field.
-const NEW_ITEM_SENTINEL = '__new__';
-
 function LineRow({
   line,
   products,
@@ -421,33 +418,22 @@ function LineRow({
   return (
     <div className="rounded-md border border-ink-100 p-3">
       <div className="grid grid-cols-12 items-center gap-3">
-        <select
-          value={line.product_id || (isAdHoc ? NEW_ITEM_SENTINEL : '')}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v === NEW_ITEM_SENTINEL) {
+        <div className="col-span-6">
+          <ProductCombobox
+            products={products}
+            value={line.product_id}
+            adHoc={isAdHoc}
+            onChange={(productId) =>
+              onChange({ product_id: productId, custom_name: '' })
+            }
+            onPickAdHoc={() =>
               onChange({
                 product_id: '',
                 custom_name: line.custom_name || 'Scrap / ad-hoc',
-              });
-            } else {
-              // Preserve a custom_name if user had one, but clear the ad-hoc
-              // flag when a real product is chosen.
-              onChange({ product_id: v, custom_name: '' });
+              })
             }
-          }}
-          className="input col-span-6"
-        >
-          <option value="">— select —</option>
-          <option value={NEW_ITEM_SENTINEL}>
-            + New item (scrap / one-off / custom)
-          </option>
-          {products.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.sku} · {p.name}
-            </option>
-          ))}
-        </select>
+          />
+        </div>
         <input
           type="number"
           min={1}
