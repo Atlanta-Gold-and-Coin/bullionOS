@@ -32,6 +32,12 @@ const uspsCreds = z.object({
   environment: z.enum(['test', 'production']).default('test'),
 });
 
+const metalsCreds = z.object({
+  api_key: z.string().min(8).max(500),
+  // URL override in case metals.dev moves or you mirror the API.
+  url: z.string().url().default('https://api.metals.dev/v1/latest'),
+});
+
 const docusignCreds = z.object({
   integration_key: z.string().min(20).max(100),
   account_id: z.string().min(20).max(100),
@@ -73,6 +79,13 @@ export const PROVIDERS = {
     secretFields: ['private_key_pem', 'webhook_secret'] as const,
     hint: (c: z.infer<typeof docusignCreds>) =>
       `acct ${mask(c.account_id)} · ${c.base_path.includes('demo') ? 'demo' : 'prod'}`,
+  },
+  metals: {
+    label: 'metals.dev',
+    schema: metalsCreds,
+    secretFields: ['api_key'] as const,
+    hint: (c: z.infer<typeof metalsCreds>) =>
+      `key ${maskId(c.api_key)} · ${new URL(c.url).host}`,
   },
 } as const;
 

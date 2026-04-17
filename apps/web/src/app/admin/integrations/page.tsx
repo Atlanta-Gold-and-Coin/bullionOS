@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
 
 interface IntegrationStatus {
-  provider: 'ups' | 'fedex' | 'usps' | 'docusign';
+  provider: 'ups' | 'fedex' | 'usps' | 'docusign' | 'metals';
   label: string;
   configured: boolean;
   enabled: boolean;
@@ -56,6 +56,10 @@ const FIELDS: Record<
     { name: 'webhook_secret', label: 'Webhook Secret (optional)', secret: true },
     { name: 'template_buy_contract', label: 'Template ID — Buy Contract (optional)' },
     { name: 'template_sell_contract', label: 'Template ID — Sell Contract (optional)' },
+  ],
+  metals: [
+    { name: 'api_key', label: 'metals.dev API key', secret: true, placeholder: 'from https://metals.dev' },
+    { name: 'url', label: 'API URL', placeholder: 'https://api.metals.dev/v1/latest' },
   ],
 };
 

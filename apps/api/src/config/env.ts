@@ -41,8 +41,11 @@ const envSchema = z.object({
     { message: 'APP_ENCRYPTION_KEY must be base64 of exactly 32 bytes' },
   ),
 
-  METALS_API_KEY: z.string().min(1),
-  METALS_API_URL: z.string().url(),
+  // Optional — preferred config path is /admin/integrations → metals.
+  // Env is a bootstrap fallback so local dev + first deploys don't have a
+  // chicken-and-egg problem before anyone's signed into the admin UI.
+  METALS_API_KEY: z.string().optional().default(''),
+  METALS_API_URL: z.string().url().default('https://api.metals.dev/v1/latest'),
   METALS_CACHE_TTL_SEC: z.coerce.number().int().positive().default(30),
 
   SMTP_HOST: z.string().optional().default(''),

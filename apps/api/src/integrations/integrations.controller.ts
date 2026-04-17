@@ -16,6 +16,7 @@ import type { ShipmentCarrier } from '../db/types';
 import { CarrierService } from './carrier.service';
 import { DocuSignService } from './docusign.service';
 import { IntegrationsService } from './integrations.service';
+import { MetalsService } from '../metals/metals.service';
 import { isProvider, type ProviderName } from './integrations.registry';
 
 function parseProvider(raw: string): ProviderName {
@@ -30,6 +31,7 @@ export class IntegrationsController {
     private readonly integrations: IntegrationsService,
     private readonly carrier: CarrierService,
     private readonly docusign: DocuSignService,
+    private readonly metals: MetalsService,
   ) {}
 
   @Get()
@@ -69,10 +71,14 @@ export class IntegrationsController {
   @Post(':provider/test')
   async test(@Param('provider') raw: string) {
     const provider = parseProvider(raw);
-    const result =
-      provider === 'docusign'
-        ? await this.docusign.testConnection()
-        : await this.carrier.testConnection(provider as ShipmentCarrier);
+    let result: { ok: boolean; message: string };
+    if (provider === 'docusign') {
+      result = await this.docusign.testConnection();
+    } else if (provider === 'metals') {
+      result = await this.metals.testConnection();
+    } else {
+      result = await this.carrier.testConnection(provider as ShipmentCarrier);
+    }
     await this.integrations.recordTestResult(provider, result.ok, result.message);
     return result;
   }

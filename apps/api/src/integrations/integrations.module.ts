@@ -9,10 +9,16 @@ import { IntegrationsController } from './integrations.controller';
 import { IntegrationsService } from './integrations.service';
 import { ShipmentIngestService } from './shipment-ingest.service';
 import { CarrierWebhooksController } from './webhooks.controller';
+import { MetalsModule } from '../metals/metals.module';
 
 // Global: many feature modules will inject CarrierService/DocuSignService.
+// Imports MetalsModule because IntegrationsController needs MetalsService
+// for the admin "Test connection" button on the metals provider. The reverse
+// dependency (MetalsService needs IntegrationsService) is satisfied by this
+// module's @Global export.
 @Global()
 @Module({
+  imports: [MetalsModule],
   controllers: [IntegrationsController, CarrierWebhooksController],
   providers: [
     IntegrationsService,
