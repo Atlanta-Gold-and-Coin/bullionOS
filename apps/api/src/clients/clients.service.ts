@@ -139,6 +139,7 @@ export class ClientsService {
         postal_code: dto.postal_code ?? null,
         country: dto.country ?? null,
         notes: dto.notes ?? null,
+        heard_from: dto.heard_from?.trim() ?? null,
         is_portal_enabled: dto.is_portal_enabled ?? false,
       })
       .returningAll()
@@ -159,6 +160,7 @@ export class ClientsService {
       'postal_code',
       'country',
       'notes',
+      'heard_from',
       'is_portal_enabled',
     ];
     for (const k of cols) {

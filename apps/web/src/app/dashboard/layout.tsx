@@ -26,7 +26,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div className="flex min-h-screen bg-ink-50 text-ink-900">
       <aside className="hidden w-60 flex-col border-r border-ink-200 bg-white px-4 py-6 md:flex">
         <div className="flex items-center gap-2 px-2">
-          <div className="h-7 w-7 rounded-md bg-ink-900" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/api/v1/public/branding/logo"
+            alt="AGC"
+            className="h-7 w-7 rounded-md object-contain"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+            }}
+          />
           <span className="font-semibold">AGC</span>
         </div>
 

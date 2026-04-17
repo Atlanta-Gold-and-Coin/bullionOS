@@ -15,6 +15,7 @@ import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser, type RequestUser } from '../common/decorators/current-user.decorator';
 import { AuthService } from './auth.service';
 import type { IssuedTokens } from './tokens.service';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 
@@ -140,5 +141,27 @@ export class AuthController {
   @Get('me')
   async me(@CurrentUser() user: RequestUser) {
     return this.auth.me(user.id);
+  }
+
+  /**
+   * Self-service password change. Requires a valid access token (inherited
+   * JwtAuthGuard) + the current password in the body. On success, every
+   * other session for this user is revoked — the caller's access token
+   * stays valid until its natural expiry (~15 min) and will then fail to
+   * refresh, signing them out cleanly.
+   */
+  @Post('change-password')
+  @HttpCode(204)
+  async changePassword(
+    @CurrentUser() user: RequestUser,
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+  ) {
+    await this.auth.changePassword(
+      user.id,
+      dto.current_password,
+      dto.new_password,
+      ctxFromRequest(req),
+    );
   }
 }

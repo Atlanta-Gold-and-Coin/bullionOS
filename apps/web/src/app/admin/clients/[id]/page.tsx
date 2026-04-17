@@ -22,6 +22,7 @@ interface Client {
   is_portal_enabled: boolean;
   user_id: string | null;
   notes: string | null;
+  heard_from: string | null;
   created_at: string;
 }
 
@@ -245,6 +246,15 @@ export default function ClientDetailPage({
         </div>
 
         <div className="rounded-xl border border-ink-200 bg-white p-4">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+            How they heard about us
+          </h3>
+          <p className="mt-2 text-sm text-ink-800">
+            {client.heard_from ?? <span className="text-ink-400">—</span>}
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-ink-200 bg-white p-4 md:col-span-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
             Notes
           </h3>

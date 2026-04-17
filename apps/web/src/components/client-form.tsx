@@ -15,8 +15,23 @@ export interface ClientFormValues {
   postal_code: string;
   country: string;
   notes: string;
+  heard_from: string;
   is_portal_enabled?: boolean;
 }
+
+// Common answers for the "how heard about us" datalist. Free-form — the
+// datalist is a suggestion, not a constraint.
+const HEARD_FROM_OPTIONS = [
+  'Google search',
+  'Facebook',
+  'Instagram',
+  'Referral',
+  'Radio',
+  'TV',
+  'Driving by',
+  'Repeat customer',
+  'Other',
+];
 
 export function ClientForm({
   initial,
@@ -141,6 +156,21 @@ export function ClientForm({
           />
         </L>
       </div>
+      <L label="How they heard about us">
+        <input
+          list="heard-from-options"
+          value={f.heard_from}
+          onChange={(e) => set('heard_from', e.target.value)}
+          className="input"
+          maxLength={200}
+          placeholder="Google, referral, radio…"
+        />
+        <datalist id="heard-from-options">
+          {HEARD_FROM_OPTIONS.map((o) => (
+            <option key={o} value={o} />
+          ))}
+        </datalist>
+      </L>
       <L label="Internal notes">
         <textarea
           value={f.notes}
@@ -201,6 +231,7 @@ export function toDto(v: ClientFormValues) {
     postal_code: v.postal_code.trim() || undefined,
     country: v.country.trim() || undefined,
     notes: v.notes.trim() || undefined,
+    heard_from: v.heard_from.trim() || undefined,
   };
 }
 
@@ -217,5 +248,6 @@ export function fromClient(c: Partial<ClientFormValues>): ClientFormValues {
     postal_code: c.postal_code ?? '',
     country: c.country ?? '',
     notes: c.notes ?? '',
+    heard_from: c.heard_from ?? '',
   };
 }

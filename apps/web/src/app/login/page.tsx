@@ -38,7 +38,17 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-ink-50 px-4">
       <div className="w-full max-w-sm rounded-2xl bg-white p-8 shadow-sm ring-1 ring-ink-200">
         <div className="mb-6">
-          <div className="h-8 w-8 rounded-md bg-ink-900" />
+          {/* Served from /api/v1/public/branding/logo — admins upload at /admin/settings */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/api/v1/public/branding/logo"
+            alt="AGC"
+            className="h-12 w-12 rounded-md object-contain"
+            onError={(e) => {
+              // Fallback to a neutral block if the logo isn't configured yet.
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+            }}
+          />
           <h1 className="mt-4 text-xl font-semibold text-ink-900">Sign in</h1>
           <p className="mt-1 text-sm text-ink-400">AGC client portal</p>
         </div>

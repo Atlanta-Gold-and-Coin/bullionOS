@@ -87,6 +87,8 @@ export interface ClientsTable {
   country: string | null;
   is_portal_enabled: ColumnType<boolean, boolean | undefined, boolean>;
   notes: string | null;
+  /** Free-form marketing source (migration 014). */
+  heard_from: string | null;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
   // Postgres GENERATED column (migration 006) — read-only from the app side.

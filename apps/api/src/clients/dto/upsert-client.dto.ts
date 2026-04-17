@@ -64,6 +64,11 @@ export class CreateClientDto {
   notes?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  heard_from?: string;
+
+  @IsOptional()
   @IsBoolean()
   is_portal_enabled?: boolean;
 }
@@ -125,6 +130,11 @@ export class UpdateClientDto {
   @IsString()
   @MaxLength(2000)
   notes?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  heard_from?: string;
 
   @IsOptional()
   @IsBoolean()

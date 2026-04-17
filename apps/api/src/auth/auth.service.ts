@@ -218,6 +218,81 @@ export class AuthService {
     await this.tokens.revoke(refreshToken);
   }
 
+  /**
+   * Self-service password change. Requires re-entering the current password
+   * (prevents drive-by change if the access token leaks), revokes every
+   * existing refresh token for the user so all other sessions are booted,
+   * and audits the event.
+   *
+   * Returns nothing — the caller's existing access token stays valid until
+   * its next natural refresh, at which point it will fail (all refreshes
+   * revoked) and the user will be signed out cleanly on every device.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    ctx: ReqCtx,
+  ): Promise<void> {
+    if (currentPassword === newPassword) {
+      throw new BadRequestException('New password must be different');
+    }
+    const user = await this.db
+      .selectFrom('users')
+      .select(['id', 'password_hash', 'status'])
+      .where('id', '=', userId)
+      .executeTakeFirst();
+    if (!user) throw new UnauthorizedException();
+    if (user.status === 'disabled') throw new ForbiddenException('Account disabled');
+
+    const ok = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!ok) {
+      await this.db
+        .insertInto('audit_logs')
+        .values({
+          actor_user_id: userId,
+          action: 'auth.password_change.reject',
+          entity_type: 'user',
+          entity_id: userId,
+          metadata: sql`'{}'::jsonb`,
+          ip_address: ctx.ip ?? null,
+          user_agent: ctx.userAgent ?? null,
+        })
+        .execute();
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const cost = this.config.get<number>('BCRYPT_COST', 12);
+    const newHash = await bcrypt.hash(newPassword, cost);
+
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('users')
+        .set({ password_hash: newHash, failed_login_count: 0, locked_until: null })
+        .where('id', '=', userId)
+        .execute();
+      // Kill every outstanding refresh token — every other device is signed out.
+      await trx
+        .updateTable('refresh_tokens')
+        .set({ revoked_at: new Date() })
+        .where('user_id', '=', userId)
+        .where('revoked_at', 'is', null)
+        .execute();
+      await trx
+        .insertInto('audit_logs')
+        .values({
+          actor_user_id: userId,
+          action: 'auth.password_change',
+          entity_type: 'user',
+          entity_id: userId,
+          metadata: sql`'{}'::jsonb`,
+          ip_address: ctx.ip ?? null,
+          user_agent: ctx.userAgent ?? null,
+        })
+        .execute();
+    });
+  }
+
   async me(userId: string) {
     const row = await this.db
       .selectFrom('users as u')
