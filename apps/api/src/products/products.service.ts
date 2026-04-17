@@ -15,10 +15,37 @@ export class ProductsService {
   ) {}
 
   async list(opts: { onlyActive?: boolean; onlyWebsite?: boolean } = {}): Promise<Product[]> {
-    let q = this.db.selectFrom('products').selectAll().orderBy('name');
+    // sort_order is the hand-curated order from the catalog drag-and-drop.
+    // Ties break on name. Migration 018 seeds unique ranks so the first
+    // render looks identical to the pre-drag version.
+    let q = this.db
+      .selectFrom('products')
+      .selectAll()
+      .orderBy('sort_order')
+      .orderBy('name');
     if (opts.onlyActive) q = q.where('is_active', '=', true);
     if (opts.onlyWebsite) q = q.where('show_on_website', '=', true);
     return q.execute();
+  }
+
+  /**
+   * Apply a new ordering. The client sends the full ordered list of ids
+   * for whatever view it's rendering (typically the full active catalog).
+   * We assign ranks in multiples of 10 so future single-row slots can
+   * stay O(1) without renumbering. If the client sends a partial list,
+   * any omitted rows keep their existing rank.
+   */
+  async reorder(orderedIds: string[]): Promise<void> {
+    if (orderedIds.length === 0) return;
+    await this.db.transaction().execute(async (trx) => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await trx
+          .updateTable('products')
+          .set({ sort_order: (i + 1) * 10 })
+          .where('id', '=', orderedIds[i])
+          .execute();
+      }
+    });
   }
 
   async getById(id: string): Promise<Product> {

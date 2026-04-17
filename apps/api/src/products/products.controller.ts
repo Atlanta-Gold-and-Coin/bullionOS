@@ -101,6 +101,22 @@ export class AdminProductsController {
   }
 
   /**
+   * Persist a new catalog order from the drag-and-drop UI. Body is the
+   * full ordered list of product ids. Takes ~one UPDATE per row; for our
+   * scale (low thousands at most) that's fine.
+   */
+  @Post('reorder')
+  @HttpCode(204)
+  async reorder(@Body() body: { order: string[] }) {
+    if (!Array.isArray(body.order)) {
+      throw new BadRequestException('order must be an array of product ids');
+    }
+    // Loose validation — bad ids just become no-ops, the service still
+    // returns 204. The UI always sends valid uuids.
+    await this.products.reorder(body.order);
+  }
+
+  /**
    * One-shot payload for the printable sheets (/admin/in-stock-sheet and
    * /admin/buy-sheet). Joins products + current buy/sell quotes + inventory
    * so the front-end needs exactly one fetch per page load.
@@ -147,6 +163,7 @@ export class AdminProductsController {
         metal: p.metal,
         category: p.category,
         show_on_website: p.show_on_website,
+        weight_troy_oz: p.weight_troy_oz,
         buy_price: q ? q.buy_unit_price : null,
         sell_price: q ? q.sell_unit_price : null,
         quantity_on_hand: on_hand,

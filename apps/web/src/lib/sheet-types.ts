@@ -10,6 +10,7 @@ export interface SheetRow {
   metal: string;
   category: string;
   show_on_website: boolean;
+  weight_troy_oz: string;
   buy_price: string | null;
   sell_price: string | null;
   quantity_on_hand: number;

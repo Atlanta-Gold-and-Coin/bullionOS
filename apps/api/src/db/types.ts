@@ -192,6 +192,7 @@ export interface ProductsTable {
   image_url: string | null;
   is_active: ColumnType<boolean, boolean | undefined, boolean>;
   show_on_website: ColumnType<boolean, boolean | undefined, boolean>;
+  sort_order: ColumnType<number, number | undefined, number>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
   // Postgres GENERATED column (migration 006) — read-only.

@@ -2,11 +2,21 @@
 
 import { useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch, ApiError } from '@/lib/api-client';
+import { apiFetch } from '@/lib/api-client';
 import { PageTint } from '@/components/page-tint';
 import { InlinePriceEditor, type PricingRule } from '@/components/inline-price-editor';
 import { useLiveSpot } from '@/lib/use-live-spot';
 import type { SheetRow } from '@/lib/sheet-types';
+import {
+  SECTIONS,
+  deriveDisplayCategory,
+  compareByFamily,
+  type DisplayCategory,
+} from '@/lib/product-category';
+
+interface EnrichedSheet extends SheetRow {
+  displayCategory: DisplayCategory;
+}
 
 export default function InStockSheetPage() {
   const qc = useQueryClient();
@@ -14,14 +24,25 @@ export default function InStockSheetPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'products', 'sheet'],
     queryFn: () => apiFetch<SheetRow[]>('/admin/products/sheet'),
-    refetchInterval: 60_000, // up-to-the-minute per product
+    refetchInterval: 60_000,
   });
 
-  const rows = useMemo(
-    () =>
-      (data ?? []).filter((r) => r.available > 0).sort((a, b) => a.name.localeCompare(b.name)),
-    [data],
-  );
+  const bySection = useMemo(() => {
+    const out = new Map<DisplayCategory, EnrichedSheet[]>();
+    for (const s of SECTIONS) out.set(s.id, []);
+    for (const row of data ?? []) {
+      if (row.available <= 0) continue; // in-stock only
+      const enriched: EnrichedSheet = {
+        ...row,
+        displayCategory: deriveDisplayCategory(row),
+      };
+      out.get(enriched.displayCategory)?.push(enriched);
+    }
+    for (const list of out.values()) list.sort(compareByFamily);
+    return out;
+  }, [data]);
+
+  const sectionsToRender = SECTIONS.filter((s) => (bySection.get(s.id)?.length ?? 0) > 0);
 
   return (
     <PageTint side="sell">
@@ -30,8 +51,9 @@ export default function InStockSheetPage() {
           <div>
             <h1 className="text-2xl font-semibold">In-stock sheet</h1>
             <p className="mt-1 text-sm text-ink-400">
-              Every product with units available. Prices refresh every minute; click
-              any price to edit the product's buy/sell premium.
+              Grouped by product family. Click any price column header to jump
+              sections. Edit premiums inline — saves to the product&rsquo;s pricing
+              rule.
             </p>
           </div>
           <div className="text-right text-xs text-ink-400">
@@ -39,48 +61,91 @@ export default function InStockSheetPage() {
           </div>
         </div>
 
-        <div className="mt-6 overflow-hidden rounded-xl border border-ink-200 bg-white">
-          {isLoading ? (
-            <div className="p-8 text-center text-sm text-ink-400">Loading…</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
-                <tr>
-                  <th className="px-4 py-3">Item</th>
-                  <th className="px-4 py-3">Metal</th>
-                  <th className="px-4 py-3 text-right">Qty</th>
-                  <th className="px-4 py-3 text-right">We buy</th>
-                  <th className="px-4 py-3 text-right">We sell</th>
-                  <th className="px-4 py-3 text-right w-32">Edit</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <SheetRowView
-                    key={r.product_id}
-                    row={r}
-                    onEdited={() =>
-                      qc.invalidateQueries({ queryKey: ['admin', 'products', 'sheet'] })
-                    }
-                  />
-                ))}
-                {rows.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-ink-400">
-                      Nothing in stock.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
+        {sectionsToRender.length > 0 && (
+          <nav className="sticky top-0 z-10 -mx-2 mt-6 overflow-x-auto rounded-xl border border-sell-200 bg-white/95 px-2 py-2 backdrop-blur">
+            <div className="flex min-w-max gap-1 text-xs">
+              {sectionsToRender.map((s) => (
+                <a
+                  key={s.id}
+                  href={`#${s.id}`}
+                  className="flex items-center gap-1.5 rounded-md px-3 py-1.5 font-medium text-ink-700 hover:bg-sell-50"
+                >
+                  {s.label}
+                  <span className="rounded-full bg-sell-100 px-1.5 text-[10px] text-sell-700">
+                    {bySection.get(s.id)!.length}
+                  </span>
+                </a>
+              ))}
+            </div>
+          </nav>
+        )}
+
+        {isLoading && (
+          <div className="mt-8 rounded-xl border border-ink-200 bg-white p-8 text-center text-sm text-ink-400">
+            Loading…
+          </div>
+        )}
+
+        {!isLoading &&
+          sectionsToRender.map((s) => (
+            <SheetSection
+              key={s.id}
+              id={s.id}
+              label={s.label}
+              rows={bySection.get(s.id)!}
+              onEdited={() =>
+                qc.invalidateQueries({ queryKey: ['admin', 'products', 'sheet'] })
+              }
+            />
+          ))}
+
+        {!isLoading && sectionsToRender.length === 0 && (
+          <div className="mt-8 rounded-xl border border-ink-200 bg-white p-12 text-center text-sm text-ink-400">
+            Nothing in stock right now.
+          </div>
+        )}
       </div>
     </PageTint>
   );
 }
 
-function SheetRowView({ row, onEdited }: { row: SheetRow; onEdited: () => void }) {
+function SheetSection({
+  id,
+  label,
+  rows,
+  onEdited,
+}: {
+  id: string;
+  label: string;
+  rows: EnrichedSheet[];
+  onEdited: () => void;
+}) {
+  return (
+    <section id={id} className="mt-8 scroll-mt-24">
+      <h2 className="mb-2 text-base font-semibold text-sell-700">{label}</h2>
+      <div className="overflow-hidden rounded-xl border border-ink-200 bg-white">
+        <table className="w-full text-sm">
+          <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
+            <tr>
+              <th className="px-4 py-3">Item</th>
+              <th className="px-4 py-3 text-right">Qty</th>
+              <th className="px-4 py-3 text-right">We buy</th>
+              <th className="px-4 py-3 text-right">We sell</th>
+              <th className="px-4 py-3 text-right w-32">Edit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <SheetRowView key={r.product_id} row={r} onEdited={onEdited} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function SheetRowView({ row, onEdited }: { row: EnrichedSheet; onEdited: () => void }) {
   const { data: rule } = useQuery({
     queryKey: ['admin', 'product', row.product_id, 'rule'],
     queryFn: () =>
@@ -93,7 +158,6 @@ function SheetRowView({ row, onEdited }: { row: SheetRow; onEdited: () => void }
         <div className="font-medium">{row.name}</div>
         <div className="font-mono text-xs text-ink-400">{row.sku}</div>
       </td>
-      <td className="px-4 py-3 capitalize text-ink-600">{row.metal}</td>
       <td className="px-4 py-3 text-right font-mono font-semibold">{row.available}</td>
       <td className="px-4 py-3 text-right font-mono text-ink-900">
         {row.buy_price !== null ? `$${Number(row.buy_price).toFixed(2)}` : '—'}

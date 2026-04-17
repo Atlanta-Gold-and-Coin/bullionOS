@@ -5,6 +5,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
 import { PageTint } from '@/components/page-tint';
 import type { SheetRow } from '@/lib/sheet-types';
+import {
+  SECTIONS,
+  deriveDisplayCategory,
+  compareByFamily,
+  type DisplayCategory,
+} from '@/lib/product-category';
 
 interface InventoryRow {
   product_id: string;
@@ -21,98 +27,163 @@ interface InventoryRow {
   show_on_website: boolean;
 }
 
+interface EnrichedRow extends InventoryRow {
+  displayCategory: DisplayCategory;
+  // Set by the product sheet query — live sell price from the current
+  // pricing rule + spot.
+  sellPrice: string | null;
+  weight_troy_oz: string;
+}
+
 export default function AdminInventoryPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'inventory'],
     queryFn: () => apiFetch<InventoryRow[]>('/admin/inventory'),
     refetchInterval: 60_000,
   });
-  // Pull live sell prices from the sheet endpoint so the inventory table
-  // can show "what we sell it for" in place of the old weighted avg cost.
   const { data: sheet } = useQuery({
     queryKey: ['admin', 'products', 'sheet'],
     queryFn: () => apiFetch<SheetRow[]>('/admin/products/sheet'),
     refetchInterval: 60_000,
   });
-  const sellPriceById = useMemo(() => {
-    const map = new Map<string, string | null>();
-    for (const s of sheet ?? []) map.set(s.product_id, s.sell_price);
-    return map;
+
+  // Join the inventory rows with the sheet so each row carries sell price
+  // + product weight (needed for family sort within a section).
+  const sheetByProduct = useMemo(() => {
+    const m = new Map<string, SheetRow>();
+    for (const s of sheet ?? []) m.set(s.product_id, s);
+    return m;
   }, [sheet]);
 
-  // Column the two tables sort by. 'name' is the baseline; 'metal' is
-  // requested so the counter can group everything alphabetically by metal
-  // (gold, palladium, platinum, silver). Click the header to toggle.
-  const [sortBy, setSortBy] = useState<'name' | 'metal'>('name');
+  const enriched = useMemo<EnrichedRow[]>(() => {
+    return (data ?? []).map((r) => {
+      const s = sheetByProduct.get(r.product_id);
+      return {
+        ...r,
+        displayCategory: deriveDisplayCategory({
+          metal: r.metal,
+          category: r.category,
+          name: r.name,
+        }),
+        sellPrice: s?.sell_price ?? null,
+        weight_troy_oz: '0', // not in InventoryRow; family sort will fall
+        // back to name parsing which is sufficient for the counter use-case.
+      };
+    });
+  }, [data, sheetByProduct]);
 
-  const { inStock, outOfStock, totalUnits } = useMemo(() => {
-    const rows = data ?? [];
-    const cmp = (a: InventoryRow, b: InventoryRow) => {
-      if (sortBy === 'metal') {
-        const m = a.metal.localeCompare(b.metal);
-        return m !== 0 ? m : a.name.localeCompare(b.name);
-      }
-      return a.name.localeCompare(b.name);
-    };
-    const inStock = rows.filter((r) => r.available > 0).sort(cmp);
-    const outOfStock = rows.filter((r) => r.available <= 0).sort(cmp);
-    const totalUnits = inStock.reduce((n, r) => n + r.available, 0);
-    return { inStock, outOfStock, totalUnits };
-  }, [data, sortBy]);
+  // Group the enriched rows into the user-facing sections. Keep both
+  // in-stock and out-of-stock buckets per section so the counter can see
+  // everything in one place.
+  const sectionRows = useMemo(() => {
+    const out = new Map<DisplayCategory, { inStock: EnrichedRow[]; outOfStock: EnrichedRow[] }>();
+    for (const section of SECTIONS) {
+      out.set(section.id, { inStock: [], outOfStock: [] });
+    }
+    for (const row of enriched) {
+      const b = out.get(row.displayCategory) ?? out.get('other')!;
+      if (row.available > 0) b.inStock.push(row);
+      else b.outOfStock.push(row);
+    }
+    // Sort each bucket by product family (keeps Eagles together etc.).
+    for (const bucket of out.values()) {
+      bucket.inStock.sort(compareByFamily);
+      bucket.outOfStock.sort(compareByFamily);
+    }
+    return out;
+  }, [enriched]);
+
+  const totalUnits = useMemo(
+    () => enriched.filter((r) => r.available > 0).reduce((n, r) => n + r.available, 0),
+    [enriched],
+  );
+  const inStockCount = enriched.filter((r) => r.available > 0).length;
+
+  // Visibility-hide empty sections so the jump bar stays tight on small
+  // catalogues. Expose both in-stock and out-of-stock counts for badges.
+  const sectionsToRender = SECTIONS.filter((s) => {
+    const b = sectionRows.get(s.id);
+    return b && (b.inStock.length + b.outOfStock.length) > 0;
+  });
 
   return (
     <PageTint side="sell">
-    <div className="mx-auto max-w-6xl">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Inventory</h1>
-          <p className="mt-1 text-sm text-ink-400">
-            Stock levels update automatically: buy invoices marked PAID add stock,
-            sell invoices marked PAID remove stock.
-          </p>
+      <div className="mx-auto max-w-6xl">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">Products</h1>
+            <p className="mt-1 text-sm text-ink-400">
+              Live stock grouped by family. In-stock items appear first in each
+              section; out-of-stock rows collapse below them.
+            </p>
+          </div>
         </div>
+
+        <section className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <SummaryCard label="In-stock SKUs" value={String(inStockCount)} />
+          <SummaryCard label="Total units available" value={String(totalUnits)} />
+          <SummaryCard
+            label="Out of stock"
+            value={String(enriched.filter((r) => r.available <= 0).length)}
+            muted
+          />
+          <SummaryCard
+            label="Total products tracked"
+            value={String(enriched.length)}
+            muted
+          />
+        </section>
+
+        {/* Sticky jump bar so the operator can hop sections without
+            scrolling. Scrolls horizontally on narrow viewports. */}
+        {sectionsToRender.length > 0 && (
+          <nav className="sticky top-0 z-10 -mx-2 mt-6 overflow-x-auto rounded-xl border border-sell-200 bg-white/95 px-2 py-2 backdrop-blur">
+            <div className="flex min-w-max gap-1 text-xs">
+              {sectionsToRender.map((s) => {
+                const b = sectionRows.get(s.id)!;
+                return (
+                  <a
+                    key={s.id}
+                    href={`#${s.id}`}
+                    className="flex items-center gap-1.5 rounded-md px-3 py-1.5 font-medium text-ink-700 hover:bg-sell-50"
+                  >
+                    {s.label}
+                    <span className="rounded-full bg-sell-100 px-1.5 text-[10px] text-sell-700">
+                      {b.inStock.length}
+                    </span>
+                  </a>
+                );
+              })}
+            </div>
+          </nav>
+        )}
+
+        {isLoading && (
+          <div className="mt-8 rounded-xl border border-ink-200 bg-white p-8 text-center text-sm text-ink-400">
+            Loading…
+          </div>
+        )}
+
+        {!isLoading &&
+          sectionsToRender.map((s) => {
+            const b = sectionRows.get(s.id)!;
+            return (
+              <CategorySection
+                key={s.id}
+                id={s.id}
+                label={s.label}
+                inStock={b.inStock}
+                outOfStock={b.outOfStock}
+              />
+            );
+          })}
+
+        {!isLoading && sectionsToRender.length === 0 && (
+          <div className="mt-8 rounded-xl border border-ink-200 bg-white p-12 text-center text-sm text-ink-400">
+            No products yet. Add some under Catalog.
+          </div>
+        )}
       </div>
-
-      {/* In-stock summary — pinned at the top per operator request so you
-          see what's sellable before having to scroll past empty SKUs. */}
-      <section className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <SummaryCard label="In-stock SKUs" value={String(inStock.length)} />
-        <SummaryCard label="Total units available" value={String(totalUnits)} />
-        <SummaryCard
-          label="Out of stock"
-          value={String(outOfStock.length)}
-          muted
-        />
-        <SummaryCard
-          label="Total products tracked"
-          value={String((data ?? []).length)}
-          muted
-        />
-      </section>
-
-      <InventoryTable
-        title="In stock"
-        subtitle="Available to sell right now"
-        rows={inStock}
-        sellPriceById={sellPriceById}
-        isLoading={isLoading}
-        emptyText="Nothing in stock. Buy tickets marked PAID add to this list."
-        sortBy={sortBy}
-        onSortChange={setSortBy}
-      />
-
-      <InventoryTable
-        title="Out of stock"
-        subtitle="Tracked products with no availability"
-        rows={outOfStock}
-        sellPriceById={sellPriceById}
-        isLoading={isLoading}
-        emptyText="Everything tracked is currently in stock."
-        muted
-        sortBy={sortBy}
-        onSortChange={setSortBy}
-      />
-    </div>
     </PageTint>
   );
 }
@@ -146,111 +217,68 @@ function SummaryCard({
   );
 }
 
-function InventoryTable({
-  title,
-  subtitle,
-  rows,
-  sellPriceById,
-  isLoading,
-  emptyText,
-  muted,
-  sortBy,
-  onSortChange,
+function CategorySection({
+  id,
+  label,
+  inStock,
+  outOfStock,
 }: {
-  title: string;
-  subtitle: string;
-  rows: InventoryRow[];
-  sellPriceById: Map<string, string | null>;
-  isLoading: boolean;
-  emptyText: string;
-  muted?: boolean;
-  sortBy: 'name' | 'metal';
-  onSortChange: (k: 'name' | 'metal') => void;
+  id: string;
+  label: string;
+  inStock: EnrichedRow[];
+  outOfStock: EnrichedRow[];
 }) {
+  const [showOut, setShowOut] = useState(false);
   return (
-    <section className="mt-8">
+    <section id={id} className="mt-8 scroll-mt-24">
       <div className="mb-2 flex items-baseline justify-between">
-        <h2 className={`text-sm font-semibold ${muted ? 'text-ink-600' : 'text-sell-700'}`}>
-          {title}
-        </h2>
-        <span className="text-xs text-ink-400">{subtitle}</span>
+        <h2 className="text-base font-semibold text-sell-700">{label}</h2>
+        <span className="text-xs text-ink-400">
+          {inStock.length} in stock · {outOfStock.length} out of stock
+        </span>
       </div>
       <div className="overflow-hidden rounded-xl border border-ink-200 bg-white">
-        {isLoading ? (
-          <div className="p-8 text-center text-sm text-ink-400">Loading…</div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
+        <table className="w-full text-sm">
+          <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
+            <tr>
+              <th className="px-4 py-3">Product</th>
+              <th className="px-4 py-3 text-right">Qty</th>
+              <th className="px-4 py-3 text-right">We sell for</th>
+              <th className="px-4 py-3 text-right">Adjust</th>
+            </tr>
+          </thead>
+          <tbody>
+            {inStock.map((r) => (
+              <InventoryRowView key={r.product_id} row={r} />
+            ))}
+            {inStock.length === 0 && (
               <tr>
-                <SortHeader
-                  label="Product"
-                  active={sortBy === 'name'}
-                  onClick={() => onSortChange('name')}
-                />
-                <SortHeader
-                  label="Metal"
-                  active={sortBy === 'metal'}
-                  onClick={() => onSortChange('metal')}
-                />
-                <th className="px-4 py-3 text-right">Qty</th>
-                <th className="px-4 py-3 text-right">We sell for</th>
-                <th className="px-4 py-3 text-right">Adjust</th>
+                <td colSpan={4} className="px-4 py-6 text-center text-sm text-ink-400">
+                  Nothing in stock in this category.
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <InventoryRowView
-                  key={r.product_id}
-                  row={r}
-                  sellPrice={sellPriceById.get(r.product_id) ?? null}
-                />
+            )}
+            {showOut &&
+              outOfStock.map((r) => (
+                <InventoryRowView key={r.product_id} row={r} dimmed />
               ))}
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-10 text-center text-ink-400">
-                    {emptyText}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          </tbody>
+        </table>
+        {outOfStock.length > 0 && (
+          <button
+            onClick={() => setShowOut((v) => !v)}
+            className="w-full border-t border-ink-100 bg-ink-50/60 px-4 py-2 text-left text-xs font-medium text-ink-600 hover:bg-ink-100"
+          >
+            {showOut ? '▾ Hide' : '▸ Show'} {outOfStock.length} out-of-stock row
+            {outOfStock.length === 1 ? '' : 's'}
+          </button>
         )}
       </div>
     </section>
   );
 }
 
-function SortHeader({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <th className="px-4 py-3">
-      <button
-        onClick={onClick}
-        className={`flex items-center gap-1 transition ${
-          active ? 'text-ink-900' : 'text-ink-400 hover:text-ink-900'
-        }`}
-      >
-        {label}
-        <span className="text-[10px]">{active ? '▼' : '⇅'}</span>
-      </button>
-    </th>
-  );
-}
-
-function InventoryRowView({
-  row,
-  sellPrice,
-}: {
-  row: InventoryRow;
-  sellPrice: string | null;
-}) {
+function InventoryRowView({ row, dimmed }: { row: EnrichedRow; dimmed?: boolean }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [delta, setDelta] = useState('');
@@ -284,12 +312,15 @@ function InventoryRowView({
 
   return (
     <>
-      <tr className="border-t border-ink-200 align-top">
+      <tr
+        className={`border-t border-ink-200 align-top ${
+          dimmed ? 'bg-ink-50/40 text-ink-400' : ''
+        }`}
+      >
         <td className="px-4 py-3">
           <div className="font-medium">{row.name}</div>
           <div className="font-mono text-xs text-ink-400">{row.sku}</div>
         </td>
-        <td className="px-4 py-3 capitalize text-ink-600">{row.metal}</td>
         <td className="px-4 py-3 text-right font-mono font-semibold">
           {row.available}
           {row.quantity_reserved > 0 && (
@@ -299,7 +330,7 @@ function InventoryRowView({
           )}
         </td>
         <td className="px-4 py-3 text-right font-mono text-ink-900">
-          {sellPrice ? `$${Number(sellPrice).toFixed(2)}` : '—'}
+          {row.sellPrice ? `$${Number(row.sellPrice).toFixed(2)}` : '—'}
         </td>
         <td className="px-4 py-3 text-right">
           <button
@@ -312,7 +343,7 @@ function InventoryRowView({
       </tr>
       {open && (
         <tr className="border-t border-ink-100 bg-ink-50/40">
-          <td colSpan={5} className="px-4 py-3">
+          <td colSpan={4} className="px-4 py-3">
             <div className="flex flex-col gap-2 md:flex-row md:items-center">
               <label className="text-xs font-medium text-ink-600">
                 Delta
@@ -337,9 +368,7 @@ function InventoryRowView({
               >
                 {busy ? 'Applying…' : 'Apply'}
               </button>
-              {error && (
-                <span className="text-xs text-red-700">{error}</span>
-              )}
+              {error && <span className="text-xs text-red-700">{error}</span>}
             </div>
           </td>
         </tr>
