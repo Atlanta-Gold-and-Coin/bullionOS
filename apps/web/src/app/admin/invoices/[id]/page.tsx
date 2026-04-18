@@ -110,6 +110,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             {data.type.toUpperCase()} · {data.client_name}
             {data.client_email ? ` · ${data.client_email}` : ''}
           </p>
+          <p className="mt-0.5 font-mono text-xs text-ink-400">
+            {formatLocalDateTime(data.created_at)}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <StatusPill status={data.status} />
@@ -320,4 +323,23 @@ function TotalRow({ label, value, bold }: { label: string; value: string; bold?:
       </span>
     </div>
   );
+}
+
+/**
+ * Render the transaction timestamp in the shop's tz so two invoices
+ * logged minutes apart stay distinguishable. Format mirrors what the
+ * PDF renderer prints, so admin screen and printed ticket match.
+ */
+function formatLocalDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  }).format(d);
 }

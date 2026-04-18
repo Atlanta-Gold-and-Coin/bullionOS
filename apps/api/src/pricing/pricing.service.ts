@@ -69,12 +69,19 @@ interface ProductRow {
  *
  * Math:
  *   melt           = spot_per_oz * metal_content_per_unit
- *   buy_per_unit   = premium_type='percent' ? melt * (1 + pct/100) : melt + (flat_per_oz * metal_content_per_unit)
+ *   buy_per_unit   = premium_type='percent' ? melt * (pct/100) : (spot + flat_per_oz) * metal_content
  *   sell_per_unit  = same formula with sell_premium
  *
- * NOTE: 'flat' premium is dollars-per-troy-oz-of-metal-content, so a "flat" premium
- * on a 1oz Gold Eagle and a 10oz gold bar scales correctly with metal content.
- * This is how precious-metals dealers typically quote flat-over-spot premiums.
+ * Percent semantics are "fraction of spot × weight" — value=96 means we pay
+ * 96% of melt (typical bullion dealer buy side). Value=105 means we sell
+ * at 105% of melt (typical retail markup). This is a break from the older
+ * "+X% above melt" semantics; all pricing_rules must be re-keyed to the
+ * new meaning.
+ *
+ * NOTE: 'flat' premium is dollars-per-troy-oz-of-metal-content, so a flat
+ * premium on a 1oz Gold Eagle and a 10oz gold bar scales correctly with
+ * metal content. This is how precious-metals dealers typically quote
+ * flat-over-spot premiums.
  */
 @Injectable()
 export class PricingService {
@@ -329,8 +336,14 @@ export class PricingService {
   ): Decimal {
     const v = d(value);
     if (type === 'percent') {
-      return melt.times(d(1).plus(v.div(100)));
+      // X% of melt. Dealer sets 96 to buy at 96% of spot-content, or 105
+      // to sell at 105% of spot-content. Explicit fraction-of semantics
+      // (not "markup above") — see class-level doc for the rationale.
+      return melt.times(v.div(100));
     }
+    // (spot + flat) × content  — flat adds a $/oz-of-metal premium on top
+    // of pure melt. Works for both directions (positive for sell above
+    // spot, negative for buy below spot).
     return melt.plus(v.times(metalContent));
   }
 }

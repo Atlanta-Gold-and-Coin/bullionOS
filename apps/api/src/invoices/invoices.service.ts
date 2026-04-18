@@ -208,6 +208,12 @@ export class InvoicesService {
             })),
           )}::jsonb`,
           notes: dto.notes ?? null,
+          // Manual timestamp override for backdated tickets (walk-in from
+          // yesterday written up today). Omitted → DB default NOW(). We
+          // deliberately write created_at — the updated_at column keeps
+          // tracking real insert time via its own default so the audit
+          // trail stays honest.
+          created_at: dto.transacted_at ? new Date(dto.transacted_at) : undefined,
           created_by_user_id: actor.id,
         })
         .returningAll()

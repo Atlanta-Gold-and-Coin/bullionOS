@@ -18,7 +18,9 @@ export type DisplayCategory =
   | 'gold_bars'
   | 'pre_1933_gold'
   | 'silver_coins'
+  | 'silver_junk'
   | 'silver_generic'
+  | 'silver_mint_sets'
   | 'platinum_coins'
   | 'platinum_bars'
   | 'palladium_coins'
@@ -37,9 +39,11 @@ export interface DisplaySection {
 export const SECTIONS: DisplaySection[] = [
   { id: 'gold_coins', label: 'Gold Coins', metal: 'gold' },
   { id: 'gold_bars', label: 'Gold Bars', metal: 'gold' },
-  { id: 'pre_1933_gold', label: 'Pre-1933 Gold', metal: 'gold' },
+  { id: 'pre_1933_gold', label: 'Pre-1933 U.S. Gold Coins', metal: 'gold' },
   { id: 'silver_coins', label: 'Silver Coins', metal: 'silver' },
-  { id: 'silver_generic', label: 'Generic Silver Rounds & Bars', metal: 'silver' },
+  { id: 'silver_junk', label: 'Junk Silver (90%)', metal: 'silver' },
+  { id: 'silver_generic', label: 'Silver Rounds / Bars (Generic)', metal: 'silver' },
+  { id: 'silver_mint_sets', label: 'Silver U.S. Mint Sets', metal: 'silver' },
   { id: 'platinum_coins', label: 'Platinum Coins', metal: 'platinum' },
   { id: 'platinum_bars', label: 'Platinum Bars', metal: 'platinum' },
   { id: 'palladium_coins', label: 'Palladium Coins', metal: 'palladium' },
@@ -104,6 +108,22 @@ export function deriveDisplayCategory(p: {
     return 'gold_coins';
   }
   if (m === 'silver') {
+    // Mint sets first — names like "Silver Proof Set", "Premier", "Prestige",
+    // "Uncirculated Mint Set". These are dated multi-coin sets with AGW
+    // already totalled on the CSV.
+    if (
+      /\bprestige\b|\bpremier\b|\bproof\s+set\b|\buncirculated\s+mint\s+set\b/.test(n)
+    ) {
+      return 'silver_mint_sets';
+    }
+    // Junk silver: 90% US coinage (Morgan / Peace dollars, pre-'65 US
+    // Half / Quarter / Dime). The price tag on these is driven by silver
+    // content, not numismatics, so they live in their own bucket.
+    if (
+      /\bmorgan\b|\bpeace\b|\bus\s+dollar\b|\bsilver\s+dollar\b|\bus\s+half\b|\bus\s+quarter\b|\bus\s+dime\b|\bhalf\s+dollar\b|\b90%\b/.test(n)
+    ) {
+      return 'silver_junk';
+    }
     if (c === 'bar' || c === 'round' || /\bgeneric\b|\bround\b|\bbar\b/.test(n)) {
       return 'silver_generic';
     }

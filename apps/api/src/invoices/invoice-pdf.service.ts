@@ -83,7 +83,7 @@ export class InvoicePdfService {
       .fontSize(9)
       .fillColor('#55555c')
       .text(`#${invoice.invoice_number}`, rightX, 78, { align: 'right', width: 200 })
-      .text(`Date: ${new Date(invoice.created_at).toISOString().slice(0, 10)}`, {
+      .text(`Date: ${formatDateTimeForPdf(invoice.created_at)}`, {
         align: 'right',
         width: 200,
       })
@@ -269,4 +269,31 @@ export class InvoicePdfService {
     doc.font(bold ? 'Courier-Bold' : 'Courier');
     doc.text(`$${toDisplay(value)}`, 490, y, { width: 68, align: 'right' });
   }
+}
+
+/**
+ * Render the invoice date + time in US/Eastern (shop's home timezone) so
+ * two invoices logged five minutes apart are distinguishable on printed
+ * PDFs. Format: "Apr 17, 2026 · 3:42 PM EDT" — short enough to fit the
+ * 200-pt header column.
+ */
+function formatDateTimeForPdf(iso: string | Date): string {
+  const d = typeof iso === 'string' ? new Date(iso) : iso;
+  if (Number.isNaN(d.getTime())) return '';
+  // Intl bakes in DST handling via timeZone; safer than manual offsets.
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+  const parts = fmt.formatToParts(d);
+  // The default format is "Apr 17, 2026, 3:42 PM EDT" — swap the middle
+  // comma for a middle dot so it reads as a single line without inviting
+  // a Date/Time column split when scanned.
+  const joined = parts.map((p) => p.value).join('');
+  return joined.replace(/,\s*(?=\d)/, ' · ');
 }

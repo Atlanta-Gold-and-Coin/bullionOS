@@ -5,6 +5,7 @@ import {
   IsArray,
   IsIn,
   IsInt,
+  IsISO8601,
   IsNumber,
   IsOptional,
   IsString,
@@ -123,4 +124,16 @@ export class CreateInvoiceDto {
   @IsString()
   @MaxLength(2000)
   notes?: string;
+
+  /**
+   * Manual timestamp override. Empty/absent = use NOW() at insert time.
+   * Supplied by the wizard for backdated walk-ins. Must be ISO-8601; the
+   * browser produces UTC via Date.toISOString(). The invoice_number
+   * sequence still uses the year of NOW(), so a backdated 2025 transaction
+   * created today still gets a 2026-numbered ticket — keeps serialization
+   * monotonic.
+   */
+  @IsOptional()
+  @IsISO8601()
+  transacted_at?: string;
 }

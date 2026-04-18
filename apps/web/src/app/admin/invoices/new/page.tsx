@@ -75,6 +75,25 @@ function blankPayment(): PaymentLeg {
   return { method: '', reference: '', amount: '' };
 }
 
+/**
+ * Marshal the two wizard inputs into an ISO-8601 string the server can
+ * parse. Interprets the local wall clock — the operator types "5:30 PM
+ * on 2026-04-17" and we send whatever UTC instant that corresponds to
+ * for the viewer's machine. Returns undefined when nothing was entered
+ * so the server falls back to NOW().
+ *
+ * If only a date was entered, we default to noon local so the invoice
+ * lands squarely in the intended day regardless of tz conversion.
+ */
+function buildTransactedAt(date: string, time: string): string | undefined {
+  if (!date && !time) return undefined;
+  const d = date || new Date().toISOString().slice(0, 10);
+  const t = time || '12:00';
+  const local = new Date(`${d}T${t}:00`);
+  if (Number.isNaN(local.getTime())) return undefined;
+  return local.toISOString();
+}
+
 export default function NewInvoicePage() {
   const router = useRouter();
   const qc = useQueryClient();
@@ -85,6 +104,11 @@ export default function NewInvoicePage() {
   const [lines, setLines] = useState<DraftLine[]>([blankLine()]);
   const [payments, setPayments] = useState<PaymentLeg[]>([blankPayment()]);
   const [notes, setNotes] = useState('');
+  // Transaction date/time override. Empty = "now" at submit; operator can
+  // backdate for walk-ins being written up later. Two inputs (date + time)
+  // keep the wizard keyboard-friendly; we marshal to ISO on submit.
+  const [txDate, setTxDate] = useState('');
+  const [txTime, setTxTime] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -173,6 +197,7 @@ export default function NewInvoicePage() {
         payment_method: validPayments[0].method,
         payment_methods: validPayments,
         notes: notes || undefined,
+        transacted_at: buildTransactedAt(txDate, txTime),
         line_items: filledLines.map((l) => {
           const base: Record<string, unknown> = {
             product_id: l.product_id,
@@ -314,6 +339,45 @@ export default function NewInvoicePage() {
                 onRemove={() => removePayment(idx)}
               />
             ))}
+          </div>
+        </section>
+
+        <section className="mt-4 rounded-xl border border-ink-200 bg-white p-5">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+            Transaction date &amp; time
+          </h2>
+          <p className="mt-1 text-xs text-ink-400">
+            Leave blank to use &ldquo;now&rdquo; when you click Create. Backdate for
+            walk-ins being written up later.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
+            <input
+              type="date"
+              value={txDate}
+              onChange={(e) => setTxDate(e.target.value)}
+              className="input font-mono md:w-44"
+              aria-label="Transaction date"
+            />
+            <input
+              type="time"
+              value={txTime}
+              onChange={(e) => setTxTime(e.target.value)}
+              className="input font-mono md:w-32"
+              aria-label="Transaction time"
+              step={60}
+            />
+            {(txDate || txTime) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTxDate('');
+                  setTxTime('');
+                }}
+                className="rounded-md border border-ink-200 px-3 py-1 text-xs text-ink-700 hover:bg-ink-50"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </section>
 
