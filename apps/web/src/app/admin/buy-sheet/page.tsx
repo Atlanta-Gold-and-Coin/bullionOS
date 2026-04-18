@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api-client';
 import { PageTint } from '@/components/page-tint';
@@ -29,16 +29,24 @@ interface EnrichedSheet extends SheetRow {
 export default function BuySheetPage() {
   const qc = useQueryClient();
   const { spot } = useLiveSpot();
+  const [search, setSearch] = useState('');
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'products', 'sheet'],
     queryFn: () => apiFetch<SheetRow[]>('/admin/products/sheet'),
     refetchInterval: 60_000,
   });
 
+  // Filter before grouping so categories show only matching rows and
+  // empty sections disappear from the jump-nav automatically.
+  const filtered = useMemo(() => {
+    if (!search.trim()) return data ?? [];
+    return rankAndFilter(data ?? [], search);
+  }, [data, search]);
+
   const bySection = useMemo(() => {
     const out = new Map<DisplayCategory, EnrichedSheet[]>();
     for (const s of SECTIONS) out.set(s.id, []);
-    for (const row of data ?? []) {
+    for (const row of filtered) {
       const enriched: EnrichedSheet = {
         ...row,
         displayCategory: deriveDisplayCategory(row),
@@ -47,7 +55,7 @@ export default function BuySheetPage() {
     }
     for (const list of out.values()) list.sort(compareByFamily);
     return out;
-  }, [data]);
+  }, [filtered]);
 
   const sectionsToRender = SECTIONS.filter((s) => (bySection.get(s.id)?.length ?? 0) > 0);
 
@@ -66,6 +74,27 @@ export default function BuySheetPage() {
           <div className="text-right text-xs text-ink-400">
             {spot?.asOf ? `Spot updated ${timeSince(spot.asOf)}` : '—'}
           </div>
+        </div>
+
+        <div className="mt-4">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by SKU, name, or metal…"
+            className="input w-full md:w-96"
+            aria-label="Search products"
+          />
+          {search.trim() && (
+            <span className="ml-3 text-xs text-ink-400">
+              {filtered.length} match{filtered.length === 1 ? '' : 'es'}
+              <button
+                onClick={() => setSearch('')}
+                className="ml-2 underline-offset-2 hover:underline"
+              >
+                clear
+              </button>
+            </span>
+          )}
         </div>
 
         {sectionsToRender.length > 0 && (
@@ -211,4 +240,41 @@ function timeSince(iso: string): string {
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   return new Date(iso).toLocaleTimeString();
+}
+
+/**
+ * Filter + rank SheetRow[] by a free-form query. Mirrors the invoice
+ * wizard's scorer so operators get consistent behavior:
+ *   +100 SKU substring, +15 SKU prefix, +60 name word-boundary,
+ *   +30 name substring, +5 metal substring, +20 per matched token.
+ * Every token must hit somewhere or the row is dropped.
+ */
+function rankAndFilter(rows: SheetRow[], rawQuery: string): SheetRow[] {
+  const q = rawQuery.trim().toLowerCase();
+  if (!q) return rows;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const scored: Array<{ r: SheetRow; s: number }> = [];
+  for (const r of rows) {
+    const sku = r.sku.toLowerCase();
+    const name = r.name.toLowerCase();
+    const metal = r.metal.toLowerCase();
+    let ok = true;
+    for (const t of tokens) {
+      if (!sku.includes(t) && !name.includes(t) && !metal.includes(t)) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    let score = 0;
+    if (sku.includes(q)) score += 100;
+    if (sku.startsWith(q)) score += 15;
+    if (name.includes(q)) score += 30;
+    if (new RegExp(`\\b${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(name)) score += 60;
+    if (metal.includes(q)) score += 5;
+    score += tokens.length * 20;
+    scored.push({ r, s: score });
+  }
+  scored.sort((a, b) => b.s - a.s || a.r.name.localeCompare(b.r.name));
+  return scored.map((x) => x.r);
 }
