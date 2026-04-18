@@ -187,12 +187,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </section>
 
-      {data.notes && (
-        <section className="mt-8 rounded-xl border border-ink-200 bg-white p-5">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">Notes</h2>
-          <p className="mt-2 text-sm text-ink-800">{data.notes}</p>
-        </section>
-      )}
+      <EditHeaderSection invoice={data} />
 
       <ShipmentSection invoiceId={data.id} invoiceStatus={data.status} />
     </div>
@@ -342,4 +337,245 @@ function formatLocalDateTime(iso: string): string {
     minute: '2-digit',
     timeZoneName: 'short',
   }).format(d);
+}
+
+const PAYMENT_METHODS = [
+  { value: 'cash', label: 'Cash' },
+  { value: 'check', label: 'Check' },
+  { value: 'zelle', label: 'Zelle' },
+  { value: 'venmo', label: 'Venmo' },
+  { value: 'wire', label: 'Wire' },
+  { value: 'ach', label: 'ACH' },
+  { value: 'card', label: 'Card' },
+  { value: 'crypto', label: 'Crypto' },
+] as const;
+
+/**
+ * Header-level editor for an existing invoice. Exposed on every invoice
+ * regardless of status — the main use-case is cleaning up a clerical
+ * error on a ticket that's already closed (finalized/paid/shipped). Line
+ * items aren't editable here because changing quantities on a paid
+ * ticket would need to unwind inventory movements; do that via
+ * void + recreate for now.
+ *
+ * Collapsed by default so the detail page stays read-only until the
+ * operator explicitly asks to edit.
+ */
+function EditHeaderSection({ invoice }: { invoice: InvoiceDetail }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [notes, setNotes] = useState(invoice.notes ?? '');
+  const [tax, setTax] = useState(String(Number(invoice.tax)));
+  const [shipping, setShipping] = useState(String(Number(invoice.shipping)));
+  const [paymentMethod, setPaymentMethod] = useState(invoice.payment_method ?? '');
+  const [txDate, setTxDate] = useState(localDateInput(invoice.created_at));
+  const [txTime, setTxTime] = useState(localTimeInput(invoice.created_at));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  async function save() {
+    setError(null);
+    setOk(null);
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {
+        notes: notes.trim() || null,
+        tax: Number(tax) || 0,
+        shipping: Number(shipping) || 0,
+      };
+      if (paymentMethod) body.payment_method = paymentMethod;
+      if (txDate) {
+        const combined = new Date(`${txDate}T${txTime || '12:00'}:00`);
+        if (!Number.isNaN(combined.getTime())) {
+          body.transacted_at = combined.toISOString();
+        }
+      }
+      await apiFetch(`/admin/invoices/${invoice.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
+      await qc.invalidateQueries({ queryKey: ['admin', 'invoice', invoice.id] });
+      await qc.invalidateQueries({ queryKey: ['admin', 'invoices'] });
+      setOk('Saved.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <section className="mt-8">
+        {invoice.notes && (
+          <div className="rounded-xl border border-ink-200 bg-white p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+                Notes
+              </h2>
+              <button
+                onClick={() => setOpen(true)}
+                className="text-xs text-ink-600 hover:text-ink-900"
+              >
+                Edit →
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-ink-800">{invoice.notes}</p>
+          </div>
+        )}
+        {!invoice.notes && (
+          <button
+            onClick={() => setOpen(true)}
+            className="rounded-md border border-ink-200 px-3 py-1.5 text-xs text-ink-700 hover:bg-ink-50"
+          >
+            Edit invoice details
+          </button>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <section className="mt-8 rounded-xl border border-ink-200 bg-white p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold">Edit invoice details</h2>
+        <button
+          onClick={() => setOpen(false)}
+          className="text-xs text-ink-500 hover:text-ink-900"
+        >
+          Close
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-ink-400">
+        Changes apply immediately — even on closed tickets. Line items stay
+        locked; to adjust quantities or prices, void + recreate.
+      </p>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+            Payment method
+          </span>
+          <select
+            value={paymentMethod}
+            onChange={(e) => setPaymentMethod(e.target.value)}
+            className="input mt-1"
+          >
+            <option value="">— unchanged —</option>
+            {PAYMENT_METHODS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+              Tax
+            </span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={tax}
+              onChange={(e) => setTax(e.target.value)}
+              className="input mt-1 font-mono"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+              Shipping
+            </span>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={shipping}
+              onChange={(e) => setShipping(e.target.value)}
+              className="input mt-1 font-mono"
+            />
+          </label>
+        </div>
+
+        <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+            Transaction date
+          </span>
+          <input
+            type="date"
+            value={txDate}
+            onChange={(e) => setTxDate(e.target.value)}
+            className="input mt-1 font-mono"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+            Transaction time
+          </span>
+          <input
+            type="time"
+            value={txTime}
+            onChange={(e) => setTxTime(e.target.value)}
+            className="input mt-1 font-mono"
+            step={60}
+          />
+        </label>
+      </div>
+
+      <label className="mt-4 block">
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+          Notes
+        </span>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={3}
+          className="input mt-1"
+          maxLength={2000}
+        />
+      </label>
+
+      {error && (
+        <div role="alert" className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+      {ok && (
+        <div className="mt-3 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
+          {ok}
+        </div>
+      )}
+
+      <div className="mt-4 flex justify-end">
+        <button
+          onClick={save}
+          disabled={saving}
+          className="rounded-md bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-800 disabled:opacity-60"
+        >
+          {saving ? 'Saving…' : 'Save changes'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** Build a value for <input type="date"> from an ISO timestamp, in
+ *  the local timezone so the displayed value matches the header pill. */
+function localDateInput(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function localTimeInput(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, '0');
 }

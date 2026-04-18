@@ -15,6 +15,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, type RequestUser } from '../common/decorators/current-user.decorator';
 import type { InvoiceStatus, InvoiceType } from '../db/types';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
+import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { UpdateInvoiceStatusDto } from './dto/update-invoice-status.dto';
 import { InvoicesService } from './invoices.service';
 import { InvoicePdfService } from './invoice-pdf.service';
@@ -55,6 +56,21 @@ export class AdminInvoicesController {
     @CurrentUser() user: RequestUser,
   ) {
     return this.invoices.updateStatus(id, dto.status, { id: user.id, role: user.role });
+  }
+
+  /**
+   * Header-level edit on a closed invoice (or any invoice). Notes, tax,
+   * shipping, payment method(s), and transaction timestamp only — line
+   * items aren't touched. See InvoicesService.updateHeader() for the
+   * rationale on keeping line edits out of this flow.
+   */
+  @Patch(':id')
+  edit(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateInvoiceDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.invoices.updateHeader(id, dto, { id: user.id, role: user.role });
   }
 
   @Get(':id/pdf')

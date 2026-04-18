@@ -7,7 +7,15 @@ import {
 } from '@nestjs/common';
 import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
-import type { DB, Invoice, InvoiceLineItem, InvoiceStatus, InvoiceType, UserRole } from '../db/types';
+import type {
+  DB,
+  Invoice,
+  InvoiceLineItem,
+  InvoiceStatus,
+  InvoiceType,
+  PaymentMethod,
+  UserRole,
+} from '../db/types';
 import { d, toDbString, Decimal } from '../common/money';
 import { PricingService } from '../pricing/pricing.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -322,6 +330,95 @@ export class InvoicesService {
       .execute();
 
     return { ...(inv as Invoice & { client_name: string; client_email: string | null }), line_items: lines };
+  }
+
+  /**
+   * Header-level edit. Accepts any subset of the metadata columns and
+   * rewrites them on the existing invoice row. Totals are recomputed
+   * when tax or shipping changes (subtotal comes from line_items, which
+   * this endpoint intentionally doesn't touch — line edits belong in a
+   * dedicated flow that can also reason about inventory movements).
+   *
+   * Allowed on any status, including closed invoices, because its main
+   * use-case is clerical cleanup on yesterday's walk-in ticket.
+   */
+  async updateHeader(
+    id: string,
+    dto: {
+      notes?: string | null;
+      tax?: number;
+      shipping?: number;
+      payment_method?: PaymentMethod;
+      payment_methods?: Array<{ method: PaymentMethod; reference?: string; amount: number }>;
+      transacted_at?: string;
+    },
+    actor: Actor,
+  ): Promise<Invoice> {
+    const existing = await this.db
+      .selectFrom('invoices')
+      .selectAll()
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!existing) throw new NotFoundException('Invoice not found');
+
+    const patch: Record<string, unknown> = {};
+    if (dto.notes !== undefined) patch.notes = dto.notes ?? null;
+    if (dto.tax !== undefined) patch.tax = toDbString(dto.tax);
+    if (dto.shipping !== undefined) patch.shipping = toDbString(dto.shipping);
+    if (dto.payment_method !== undefined) patch.payment_method = dto.payment_method;
+    if (dto.payment_methods !== undefined) {
+      patch.payment_methods = sql`${JSON.stringify(
+        dto.payment_methods.map((m) => ({
+          method: m.method,
+          reference: m.reference ?? null,
+          amount: toDbString(m.amount),
+        })),
+      )}::jsonb`;
+      // Keep the legacy single-method column in sync so the PDF header
+      // continues to render the primary method without back-references.
+      if (dto.payment_methods.length > 0 && dto.payment_method === undefined) {
+        patch.payment_method = dto.payment_methods[0].method;
+      }
+    }
+    if (dto.transacted_at) patch.created_at = new Date(dto.transacted_at);
+
+    // Recompute total when tax/shipping moves. Subtotal stays as-is
+    // because line items are unchanged.
+    const newTax =
+      dto.tax !== undefined ? d(dto.tax) : d(existing.tax as unknown as string);
+    const newShipping =
+      dto.shipping !== undefined ? d(dto.shipping) : d(existing.shipping as unknown as string);
+    if (dto.tax !== undefined || dto.shipping !== undefined) {
+      const subtotal = d(existing.subtotal as unknown as string);
+      patch.total = toDbString(subtotal.plus(newTax).plus(newShipping));
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return existing as Invoice;
+    }
+
+    const updated = await this.db
+      .updateTable('invoices')
+      .set(patch)
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    await this.db
+      .insertInto('audit_logs')
+      .values({
+        actor_user_id: actor.id,
+        action: 'invoice.edit_header',
+        entity_type: 'invoice',
+        entity_id: id,
+        metadata: sql`${JSON.stringify({
+          changed_fields: Object.keys(patch),
+          previous_status: existing.status,
+        })}::jsonb`,
+      })
+      .execute();
+
+    return updated as Invoice;
   }
 
   async updateStatus(id: string, status: InvoiceStatus, actor: Actor): Promise<Invoice> {

@@ -47,21 +47,42 @@ export default function AdminDashboard() {
         </Link>
       </div>
 
-      <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
-        <Stat label="Products active" value={String(products?.length ?? '—')} />
-        <Stat label="Invoices (all time)" value={String(invoices?.length ?? '—')} />
-        <Stat
-          label="Volume (all invoices)"
-          value={
-            invoices
-              ? '$' +
-                invoices
-                  .reduce((s, i) => s + Number(i.total), 0)
-                  .toLocaleString(undefined, { maximumFractionDigits: 2 })
-              : '—'
-          }
-        />
-      </section>
+      {/*
+       * Dashboard totals exclude draft + canceled invoices — only paid,
+       * finalized, or shipped rows count toward realized volume. Split
+       * into buy vs sell so the operator sees money-in and money-out
+       * independently instead of a single lumped number.
+       */}
+      {(() => {
+        const committed = (invoices ?? []).filter(
+          (i) => i.status !== 'draft' && i.status !== 'canceled',
+        );
+        const buyTotal = committed
+          .filter((i) => i.type === 'buy')
+          .reduce((s, i) => s + Number(i.total), 0);
+        const sellTotal = committed
+          .filter((i) => i.type === 'sell')
+          .reduce((s, i) => s + Number(i.total), 0);
+        return (
+          <section className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Stat label="Products active" value={String(products?.length ?? '—')} />
+            <Stat
+              label="Committed invoices"
+              value={String(committed.length)}
+            />
+            <Stat
+              label="Buy volume"
+              value={invoices ? `$${buyTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}
+              tone="buy"
+            />
+            <Stat
+              label="Sell volume"
+              value={invoices ? `$${sellTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}
+              tone="sell"
+            />
+          </section>
+        );
+      })()}
 
       <section className="mt-10">
         <div className="flex items-center justify-between">
@@ -122,11 +143,29 @@ export default function AdminDashboard() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: 'buy' | 'sell';
+}) {
+  const accent =
+    tone === 'buy'
+      ? 'border-buy-200 bg-buy-50'
+      : tone === 'sell'
+        ? 'border-sell-200 bg-sell-50'
+        : 'border-ink-200 bg-white';
+  const valueColor =
+    tone === 'buy' ? 'text-buy-700' : tone === 'sell' ? 'text-sell-700' : 'text-ink-900';
   return (
-    <div className="rounded-xl border border-ink-200 bg-white p-5">
+    <div className={`rounded-xl border p-5 ${accent}`}>
       <div className="text-xs font-medium uppercase tracking-wide text-ink-400">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-ink-900">{value}</div>
+      <div className={`mt-2 text-2xl font-semibold tabular-nums ${valueColor}`}>
+        {value}
+      </div>
     </div>
   );
 }
