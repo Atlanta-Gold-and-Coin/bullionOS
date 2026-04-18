@@ -77,8 +77,8 @@ export default function ProductDetailPage({
       </div>
 
       <header className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">{product.name}</h1>
+        <div className="min-w-0 flex-1">
+          <InlineNameEditor product={product} />
           <p className="mt-1 font-mono text-sm text-ink-400">{product.sku}</p>
           <p className="mt-1 text-sm capitalize text-ink-600">
             {product.metal} · {product.category} ·{' '}
@@ -380,6 +380,132 @@ function PremiumInput({
         />
       </div>
       <p className="mt-1 text-xs text-ink-400">{hint}</p>
+    </div>
+  );
+}
+
+/**
+ * In-place name editor on the product detail header. Click the pencil →
+ * input appears; Save persists via PATCH /admin/products/:id and
+ * invalidates every list query that renders a product name so
+ * Catalog / Products / In-stock / Buy-sheet / Invoices (new invoice
+ * wizard) all refresh with the updated text on their next render.
+ *
+ * Historical invoices keep their old name — `product_name_snapshot` was
+ * captured at invoice-create time (see migration 009 + invoices.service
+ * line-item insert). Changing the product name here never rewrites that
+ * snapshot, which is the correct audit behavior.
+ */
+function InlineNameEditor({ product }: { product: Product }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(product.name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    const next = value.trim();
+    if (!next) {
+      setError('Name is required.');
+      return;
+    }
+    if (next === product.name) {
+      setEditing(false);
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      await apiFetch(`/admin/products/${product.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: next }),
+      });
+      // Invalidate every query that renders this name. React Query will
+      // refetch on next mount; we also update the cached detail response
+      // optimistically so the h1 reads correctly without waiting.
+      qc.setQueryData(['admin', 'product', product.id], {
+        ...product,
+        name: next,
+      });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['admin', 'products'] }),
+        qc.invalidateQueries({ queryKey: ['admin', 'products', 'sheet'] }),
+        qc.invalidateQueries({ queryKey: ['admin', 'inventory'] }),
+        qc.invalidateQueries({ queryKey: ['admin', 'product', product.id] }),
+        qc.invalidateQueries({ queryKey: ['client', 'prices'] }),
+        qc.invalidateQueries({ queryKey: ['client', 'in-stock'] }),
+      ]);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Save failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function cancel() {
+    setValue(product.name);
+    setError(null);
+    setEditing(false);
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex items-start gap-2">
+        <h1 className="text-2xl font-semibold leading-tight">{product.name}</h1>
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="rounded-md border border-ink-200 px-2 py-0.5 text-[11px] text-ink-600 hover:bg-ink-50"
+          aria-label="Edit product name"
+          title="Edit name"
+        >
+          Edit
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            save();
+          } else if (e.key === 'Escape') {
+            cancel();
+          }
+        }}
+        autoFocus
+        maxLength={200}
+        className="input w-full text-lg font-semibold"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy}
+          className="rounded-md bg-ink-900 px-3 py-1 text-sm font-medium text-white hover:bg-ink-800 disabled:opacity-60"
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          type="button"
+          onClick={cancel}
+          disabled={busy}
+          className="rounded-md border border-ink-200 px-3 py-1 text-sm text-ink-700 hover:bg-ink-50"
+        >
+          Cancel
+        </button>
+        {error && <span className="text-xs text-red-700">{error}</span>}
+      </div>
+      <p className="text-[11px] text-ink-400">
+        Past invoices keep whatever name was in effect the day they were
+        created — renaming only affects future tickets and every live list.
+      </p>
     </div>
   );
 }
