@@ -22,6 +22,30 @@ import { UpdateInvoiceStatusDto } from './dto/update-invoice-status.dto';
 import { InvoicesService } from './invoices.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 
+/**
+ * Declared BEFORE AdminInvoicesController because Nest's
+ * `design:paramtypes` metadata reflection runs at class-decoration time.
+ * When compiled to CommonJS by `nest build`, class declarations are not
+ * hoisted the way TypeScript source makes them appear to be — a DTO
+ * referenced as a parameter type must already be defined by the time
+ * the controller's decorators run, or you get a temporal-dead-zone
+ * ReferenceError on container startup. (tsx + dev hot-reload are more
+ * forgiving, which is why typecheck + dev boot both passed while prod
+ * crashed.)
+ */
+class EmailInvoiceDto {
+  @IsEmail()
+  to!: string;
+
+  /**
+   * If true and `to` is not already the client's primary email, append it
+   * to their `secondary_emails` array. (INV-007 req.)
+   */
+  @IsOptional()
+  @IsBoolean()
+  save_to_client?: boolean;
+}
+
 @Controller('admin/invoices')
 @Roles('admin', 'staff')
 export class AdminInvoicesController {
@@ -128,17 +152,4 @@ export class AdminInvoicesController {
   // copy on this controller would collide with `GET :id` (which uses
   // ParseUUIDPipe) at the routing layer since the slug `wholesale` is
   // not a UUID and Nest matches in declaration order.
-}
-
-class EmailInvoiceDto {
-  @IsEmail()
-  to!: string;
-
-  /**
-   * If true and `to` is not already the client's primary email, append it
-   * to their `secondary_emails` array. (INV-007 req.)
-   */
-  @IsOptional()
-  @IsBoolean()
-  save_to_client?: boolean;
 }
