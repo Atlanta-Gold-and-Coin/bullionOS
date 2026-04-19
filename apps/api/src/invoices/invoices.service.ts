@@ -20,11 +20,16 @@ import { d, toDbString, Decimal } from '../common/money';
 import { PricingService } from '../pricing/pricing.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InventoryService } from '../inventory/inventory.service';
+import { EmailService } from '../email/email.service';
+import { InvoicePdfService } from './invoice-pdf.service';
 import type { CreateInvoiceDto } from './dto/create-invoice.dto';
 
 export interface InvoiceWithLines extends Invoice {
   client_name: string;
   client_email: string | null;
+  /** Whether the backing client is wholesale — drives the "Mark Paid" button + WH reports. */
+  client_type?: 'retail' | 'wholesaler';
+  client_company?: string | null;
   line_items: InvoiceLineItem[];
 }
 
@@ -40,6 +45,8 @@ export class InvoicesService {
     private readonly pricing: PricingService,
     private readonly notifications: NotificationsService,
     private readonly inventory: InventoryService,
+    private readonly email: EmailService,
+    private readonly pdf: InvoicePdfService,
   ) {}
 
   /** Resolve the client record owned by the given user. Throws if none. */
@@ -84,7 +91,9 @@ export class InvoicesService {
       .innerJoin('clients as c', 'c.id', 'i.client_id')
       .selectAll('i')
       .select([
-        sql<string>`c.first_name || ' ' || c.last_name`.as('client_name'),
+        sql<string>`coalesce(nullif(trim(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')), ''), c.company, '(unnamed)')`.as(
+          'client_name',
+        ),
         'c.client_type as client_type',
       ])
       .orderBy('i.created_at', 'desc')
@@ -104,8 +113,12 @@ export class InvoicesService {
       .innerJoin('clients as c', 'c.id', 'i.client_id')
       .selectAll('i')
       .select([
-        sql<string>`c.first_name || ' ' || c.last_name`.as('client_name'),
+        sql<string>`coalesce(nullif(trim(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')), ''), c.company, '(unnamed)')`.as(
+          'client_name',
+        ),
         'c.email as client_email',
+        'c.client_type as client_type',
+        'c.company as client_company',
       ])
       .where('i.id', '=', id)
       .executeTakeFirst();
@@ -119,7 +132,15 @@ export class InvoicesService {
       .orderBy('position')
       .execute();
 
-    return { ...(invoice as Invoice & { client_name: string; client_email: string | null }), line_items: lines };
+    return {
+      ...(invoice as Invoice & {
+        client_name: string;
+        client_email: string | null;
+        client_type: 'retail' | 'wholesaler';
+        client_company: string | null;
+      }),
+      line_items: lines,
+    };
   }
 
   /**
@@ -316,7 +337,9 @@ export class InvoicesService {
       .innerJoin('clients as c', 'c.id', 'i.client_id')
       .selectAll('i')
       .select([
-        sql<string>`c.first_name || ' ' || c.last_name`.as('client_name'),
+        sql<string>`coalesce(nullif(trim(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')), ''), c.company, '(unnamed)')`.as(
+          'client_name',
+        ),
         'c.email as client_email',
       ])
       .where('i.id', '=', id)
@@ -440,11 +463,16 @@ export class InvoicesService {
       status: InvoiceStatus;
       finalized_at: Date;
       paid_at: Date;
+      paid_by_user_id: string | null;
       payment_status: 'paid';
     }> = { status };
     if (status === 'finalized') patch.finalized_at = new Date();
     if (status === 'paid') {
       patch.paid_at = new Date();
+      // Record who marked it paid — the audit trail for wholesale AR.
+      // Cheap to record on every paid-transition; migration 022 added
+      // the column. See WH-002.
+      patch.paid_by_user_id = actor.id;
       patch.payment_status = 'paid';
     }
 
@@ -561,6 +589,257 @@ export class InvoicesService {
     });
 
     return updated;
+  }
+
+  /**
+   * Hard-delete a draft invoice and its line items. Only allowed while the
+   * invoice is still a draft — no reserved inventory, no audit impact on
+   * closed invoices. Returns the deleted invoice_number for the UI toast.
+   *
+   * Guards:
+   *   - must be status='draft' (BadRequestException otherwise)
+   *   - line items cascade via FK ON DELETE (no manual cleanup)
+   *
+   * Emits `invoice.draft.delete` audit event. We intentionally do NOT
+   * release reserved inventory here because drafts don't reserve — see
+   * `classifyInventoryAction`: reservation happens on draft→finalized.
+   */
+  async deleteDraft(id: string, actor: Actor): Promise<{ invoice_number: string }> {
+    const current = await this.db
+      .selectFrom('invoices')
+      .select(['id', 'status', 'invoice_number', 'client_id'])
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!current) throw new NotFoundException('Invoice not found');
+    if (current.status !== 'draft') {
+      throw new BadRequestException(
+        `Only draft invoices can be deleted. This invoice is ${current.status}; cancel it instead.`,
+      );
+    }
+
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .deleteFrom('invoice_line_items')
+        .where('invoice_id', '=', id)
+        .execute();
+      await trx.deleteFrom('invoices').where('id', '=', id).execute();
+      await trx
+        .insertInto('audit_logs')
+        .values({
+          actor_user_id: actor.id,
+          action: 'invoice.draft.delete',
+          entity_type: 'invoice',
+          entity_id: id,
+          metadata: sql`${JSON.stringify({
+            invoice_number: current.invoice_number,
+            client_id: current.client_id,
+          })}::jsonb`,
+        })
+        .execute();
+    });
+
+    return { invoice_number: current.invoice_number };
+  }
+
+  /**
+   * Render the invoice as PDF and email it to the given address. Does not
+   * mutate invoice state — works on drafts too (INV-006, INV-007).
+   *
+   * If `saveToClient=true` and the target address is not already the
+   * primary email, append it to the client's `secondary_emails` JSONB.
+   * Dedupe is handled at the column level by `normalizeEmails` in
+   * ClientsService but we also skip the write entirely when the address
+   * already exists on the client record.
+   *
+   * Body text is kept short and factual; the PDF carries the detail. The
+   * SMTP transport is dev-logged when SMTP_HOST is not configured.
+   */
+  async emailInvoice(
+    id: string,
+    opts: { to: string; saveToClient?: boolean },
+    actor: Actor,
+  ): Promise<{ sent_to: string; saved_to_client: boolean }> {
+    const invoice = await this.getById(id);
+    const to = opts.to.trim().toLowerCase();
+    if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      throw new BadRequestException('Invalid email address');
+    }
+
+    // Render the PDF to a Buffer so we can attach it.
+    const pdfStream = await this.pdf.render(invoice);
+    const chunks: Buffer[] = [];
+    for await (const chunk of pdfStream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+    }
+    const pdfBuffer = Buffer.concat(chunks);
+
+    const human = invoice.invoice_number;
+    const subject =
+      invoice.type === 'sell'
+        ? `Your invoice from Atlanta Gold & Coin — ${human}`
+        : `Buy ticket from Atlanta Gold & Coin — ${human}`;
+    const body =
+      `Hi ${invoice.client_name},\n\n` +
+      `Your ${invoice.type === 'sell' ? 'invoice' : 'buy ticket'} ${human} is attached as a PDF.\n` +
+      `Total: $${Number(invoice.total).toFixed(2)}\n` +
+      `Status: ${invoice.status}\n\n` +
+      `If you have questions, just reply to this email.\n\n` +
+      `— Atlanta Gold & Coin`;
+
+    await this.email.send({
+      to,
+      subject,
+      text: body,
+      attachments: [
+        {
+          filename: `invoice-${human}.pdf`,
+          content: pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ],
+    });
+
+    let savedToClient = false;
+    if (opts.saveToClient) {
+      const client = await this.db
+        .selectFrom('clients')
+        .select(['email', 'secondary_emails'])
+        .where('id', '=', invoice.client_id)
+        .executeTakeFirst();
+      if (client) {
+        const primary = client.email?.trim().toLowerCase() ?? null;
+        const existing = (client.secondary_emails as string[] | null) ?? [];
+        const existingLower = new Set(existing.map((e) => e.trim().toLowerCase()));
+        if (primary !== to && !existingLower.has(to)) {
+          const next = Array.from(new Set([...existing, to])).sort();
+          await this.db
+            .updateTable('clients')
+            .set({
+              secondary_emails: sql`${JSON.stringify(next)}::jsonb` as never,
+            })
+            .where('id', '=', invoice.client_id)
+            .execute();
+          savedToClient = true;
+        }
+      }
+    }
+
+    await this.db
+      .insertInto('audit_logs')
+      .values({
+        actor_user_id: actor.id,
+        action: 'invoice.email',
+        entity_type: 'invoice',
+        entity_id: id,
+        metadata: sql`${JSON.stringify({
+          invoice_number: human,
+          to,
+          saved_to_client: savedToClient,
+        })}::jsonb`,
+      })
+      .execute();
+
+    return { sent_to: to, saved_to_client: savedToClient };
+  }
+
+  /**
+   * Wholesale reconciliation — every finalized (not-yet-paid) wholesale
+   * invoice, grouped by client, with a per-client running balance.
+   *
+   * Powers:
+   *   - /admin/wholesale/reconciliation (ticket WH-001)
+   *   - KPI card "Total Owed by All Wholesalers" (WH-003)
+   *
+   * Uses the partial index `invoices_outstanding_by_client_idx` (migration
+   * 022) for the finalized+wholesale filter.
+   */
+  async listOutstandingWholesale(): Promise<{
+    total_owed: string;
+    by_client: Array<{
+      client_id: string;
+      client_name: string;
+      client_email: string | null;
+      invoice_count: number;
+      owed: string;
+      invoices: Array<{
+        id: string;
+        invoice_number: string;
+        total: string;
+        created_at: Date;
+        type: InvoiceType;
+      }>;
+    }>;
+  }> {
+    const rows = await this.db
+      .selectFrom('invoices as i')
+      .innerJoin('clients as c', 'c.id', 'i.client_id')
+      .select([
+        'i.id',
+        'i.invoice_number',
+        'i.total',
+        'i.created_at',
+        'i.type',
+        'i.client_id',
+        'c.email as client_email',
+        sql<string>`coalesce(nullif(trim(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')), ''), c.company, '(unnamed)')`.as(
+          'client_name',
+        ),
+      ])
+      .where('c.client_type', '=', 'wholesaler')
+      .where('i.status', '=', 'finalized')
+      .orderBy('c.last_name')
+      .orderBy('i.created_at', 'asc')
+      .execute();
+
+    const grouped = new Map<
+      string,
+      {
+        client_id: string;
+        client_name: string;
+        client_email: string | null;
+        invoice_count: number;
+        owed: Decimal;
+        invoices: Array<{
+          id: string;
+          invoice_number: string;
+          total: string;
+          created_at: Date;
+          type: InvoiceType;
+        }>;
+      }
+    >();
+
+    let total = d(0);
+    for (const r of rows) {
+      const existing = grouped.get(r.client_id) ?? {
+        client_id: r.client_id,
+        client_name: r.client_name,
+        client_email: r.client_email,
+        invoice_count: 0,
+        owed: d(0),
+        invoices: [],
+      };
+      const amt = d(r.total as unknown as string);
+      existing.owed = existing.owed.plus(amt);
+      existing.invoice_count += 1;
+      existing.invoices.push({
+        id: r.id,
+        invoice_number: r.invoice_number,
+        total: r.total as unknown as string,
+        created_at: r.created_at as Date,
+        type: r.type,
+      });
+      grouped.set(r.client_id, existing);
+      total = total.plus(amt);
+    }
+
+    return {
+      total_owed: toDbString(total),
+      by_client: Array.from(grouped.values()).map((g) => ({
+        ...g,
+        owed: toDbString(g.owed),
+      })),
+    };
   }
 
   /**

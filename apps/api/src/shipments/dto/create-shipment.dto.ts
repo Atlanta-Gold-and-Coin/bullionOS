@@ -20,6 +20,16 @@ export class CreateShipmentDto {
   @MaxLength(80)
   tracking_number?: string;
 
+  /**
+   * Carrier-specific service level. See `shipments/delivery-speeds.ts`
+   * for the carrier→speed whitelist. Validated in the service so
+   * mismatched pairs are rejected with a human-readable error.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  delivery_speed?: string;
+
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)

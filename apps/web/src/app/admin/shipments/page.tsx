@@ -13,11 +13,15 @@ interface AdminShipment {
   client_name: string;
   carrier: 'ups' | 'fedex' | 'usps' | 'other';
   tracking_number: string | null;
+  /** Carrier-specific service level (migration 021, ticket SHIP-001). */
+  delivery_speed: string | null;
   tracking_url: string | null;
   status: string;
   shipped_at: string | null;
   delivered_at: string | null;
 }
+
+type Carrier = AdminShipment['carrier'];
 
 const STATUS_OPTIONS = [
   { value: 'label_created', label: 'Label created' },
@@ -35,6 +39,14 @@ export default function AdminShipmentsPage() {
     refetchInterval: 30_000,
   });
 
+  // Delivery-speed whitelist — single fetch, shared across rows (SHIP-001).
+  const { data: speeds } = useQuery({
+    queryKey: ['admin', 'shipments', 'delivery-speeds'],
+    queryFn: () =>
+      apiFetch<Record<Carrier, string[]>>('/admin/shipments/delivery-speeds'),
+    staleTime: Infinity,
+  });
+
   return (
     <div className="mx-auto max-w-6xl">
       <h1 className="text-2xl font-semibold">Shipments</h1>
@@ -42,13 +54,16 @@ export default function AdminShipmentsPage() {
         Shipments are created from the invoice detail page.
       </p>
 
-      <div className="mt-6 overflow-hidden rounded-xl border border-ink-200 bg-white">
-        <table className="w-full text-sm">
+      {/* MOB-002: wide table scrolls horizontally on narrow viewports
+          instead of clipping. min-w keeps columns legible. */}
+      <div className="mt-6 overflow-x-auto rounded-xl border border-ink-200 bg-white">
+        <table className="w-full min-w-[780px] text-sm">
           <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
             <tr>
               <th className="px-4 py-3">Invoice</th>
               <th className="px-4 py-3">Client</th>
               <th className="px-4 py-3">Carrier</th>
+              <th className="px-4 py-3">Service</th>
               <th className="px-4 py-3">Tracking</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3"></th>
@@ -56,11 +71,11 @@ export default function AdminShipmentsPage() {
           </thead>
           <tbody>
             {(data ?? []).map((s) => (
-              <ShipmentRow key={s.id} s={s} />
+              <ShipmentRow key={s.id} s={s} speeds={speeds ?? null} />
             ))}
             {(!data || data.length === 0) && (
               <tr>
-                <td colSpan={6} className="px-4 py-12 text-center text-ink-400">
+                <td colSpan={7} className="px-4 py-12 text-center text-ink-400">
                   No shipments yet.
                 </td>
               </tr>
@@ -72,24 +87,47 @@ export default function AdminShipmentsPage() {
   );
 }
 
-function ShipmentRow({ s }: { s: AdminShipment }) {
+function ShipmentRow({
+  s,
+  speeds,
+}: {
+  s: AdminShipment;
+  speeds: Record<Carrier, string[]> | null;
+}) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [tracking, setTracking] = useState(s.tracking_number ?? '');
+  const [deliverySpeed, setDeliverySpeed] = useState(s.delivery_speed ?? '');
   const [status, setStatus] = useState(s.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const carrierSpeeds = speeds?.[s.carrier] ?? [];
+  // If the saved speed isn't in the current whitelist (e.g. the whitelist
+  // changed after the row was created), still render it in the dropdown
+  // so the operator sees what's stored rather than an empty-looking row.
+  const dropdownSpeeds =
+    deliverySpeed && !carrierSpeeds.includes(deliverySpeed)
+      ? [deliverySpeed, ...carrierSpeeds]
+      : carrierSpeeds;
 
   async function save() {
     setError(null);
     setBusy(true);
     try {
+      const patch: Record<string, unknown> = {
+        tracking_number: tracking || undefined,
+        status: status !== s.status ? status : undefined,
+      };
+      // Only send delivery_speed when it actually changed — sending the
+      // same value is a no-op server-side but costs a round-trip on the
+      // validator. Empty string means "clear it".
+      if ((s.delivery_speed ?? '') !== deliverySpeed) {
+        patch.delivery_speed = deliverySpeed || undefined;
+      }
       await apiFetch(`/admin/shipments/${s.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          tracking_number: tracking || undefined,
-          status: status !== s.status ? status : undefined,
-        }),
+        body: JSON.stringify(patch),
       });
       await qc.invalidateQueries({ queryKey: ['admin', 'shipments'] });
       setEditing(false);
@@ -109,6 +147,31 @@ function ShipmentRow({ s }: { s: AdminShipment }) {
       </td>
       <td className="px-4 py-3">{s.client_name}</td>
       <td className="px-4 py-3 uppercase">{s.carrier}</td>
+      <td className="px-4 py-3 text-xs">
+        {editing ? (
+          <select
+            value={deliverySpeed}
+            onChange={(e) => setDeliverySpeed(e.target.value)}
+            disabled={carrierSpeeds.length === 0}
+            className="input w-44 text-xs"
+          >
+            <option value="">
+              {carrierSpeeds.length === 0 ? '— n/a —' : '— service —'}
+            </option>
+            {dropdownSpeeds.map((speed) => (
+              <option key={speed} value={speed}>
+                {speed}
+              </option>
+            ))}
+          </select>
+        ) : s.delivery_speed ? (
+          <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-medium text-ink-700">
+            {s.delivery_speed}
+          </span>
+        ) : (
+          <span className="text-ink-400">—</span>
+        )}
+      </td>
       <td className="px-4 py-3 font-mono text-xs">
         {editing ? (
           <input

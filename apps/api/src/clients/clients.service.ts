@@ -130,12 +130,26 @@ export class ClientsService {
   }
 
   create(dto: CreateClientDto): Promise<Client> {
+    // DB CHECK constraint `clients_has_identity` guarantees at least one of
+    // first/last/company is non-empty, but reject in app code too so the
+    // error is human-readable instead of a raw Postgres constraint message.
+    const first = dto.first_name?.trim();
+    const last = dto.last_name?.trim();
+    const company = dto.company?.trim();
+    if (!first && !last && !company) {
+      throw new BadRequestException(
+        'Provide a first name, last name, or company.',
+      );
+    }
     return this.db
       .insertInto('clients')
       .values({
-        first_name: dto.first_name.trim(),
-        last_name: dto.last_name.trim(),
+        first_name: first || null,
+        last_name: last || null,
+        company: company || null,
         email: dto.email?.trim().toLowerCase() ?? null,
+        // Dedupe + lowercase the secondary list. JSONB array; Kysely serializes.
+        secondary_emails: normalizeEmails(dto.secondary_emails, dto.email),
         phone: dto.phone?.trim() ?? null,
         address_line1: dto.address_line1 ?? null,
         address_line2: dto.address_line2 ?? null,
@@ -157,6 +171,7 @@ export class ClientsService {
     const cols: (keyof UpdateClientDto)[] = [
       'first_name',
       'last_name',
+      'company',
       'email',
       'phone',
       'address_line1',
@@ -172,11 +187,26 @@ export class ClientsService {
     ];
     for (const k of cols) {
       if (dto[k] !== undefined) {
-        patch[k] =
-          k === 'email'
-            ? (dto.email as string).trim().toLowerCase()
-            : (dto[k] as string | boolean);
+        if (k === 'email') {
+          patch.email = (dto.email as string).trim().toLowerCase();
+        } else if (k === 'first_name' || k === 'last_name' || k === 'company') {
+          // Collapse empty strings to NULL so the CHECK constraint and the
+          // search_text GENERATED column both treat the field uniformly.
+          const v = (dto[k] as string | undefined)?.trim();
+          patch[k] = v && v.length > 0 ? v : null;
+        } else {
+          patch[k] = dto[k] as string | boolean;
+        }
       }
+    }
+    if (dto.secondary_emails !== undefined) {
+      // Exclude primary (if set in same patch or already on row) from the
+      // secondary list so we don't duplicate-mention the same address.
+      const primaryNow =
+        typeof patch.email === 'string'
+          ? (patch.email as string)
+          : (await this.getById(id)).email;
+      patch.secondary_emails = normalizeEmails(dto.secondary_emails, primaryNow);
     }
     if (Object.keys(patch).length === 0) return this.getById(id);
 
@@ -188,6 +218,97 @@ export class ClientsService {
       .executeTakeFirst();
     if (!row) throw new NotFoundException('Client not found');
     return row;
+  }
+
+  /**
+   * Locate (or create) a client for an inbound calendar booking.
+   *
+   * Matching order is deliberately conservative — a duplicate client is
+   * cheap to merge later, but a wrong auto-link silently pollutes the
+   * history of a real customer. Priorities:
+   *
+   *   1. Exact case-insensitive match on the primary email column.
+   *   2. Exact match on the secondary_emails JSONB array.
+   *   3. Exact match on phone after stripping non-digits (US numbers get
+   *      compared as 10-digit strings so "(404) 555-1212" and
+   *      "404-555-1212" collide).
+   *
+   * If none match we *create* a retail client using whatever personal
+   * info the booking provided. Fuzzy trigram matching is NOT used here —
+   * see CAL-001 risk notes — we'd rather admins merge two "Jane Smith"s
+   * than auto-link the wrong one.
+   *
+   * Returns the resolved client id + whether it's newly created so the
+   * caller can surface "created client" vs "linked existing" in the UI.
+   */
+  async findOrCreateByContact(input: {
+    name?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    actorUserId?: string | null;
+  }): Promise<{ id: string; created: boolean }> {
+    const email = input.email?.trim().toLowerCase() ?? null;
+    const phone = input.phone?.trim() ?? null;
+    const digits = phone?.replace(/\D/g, '') ?? null;
+    const last10 = digits && digits.length >= 10 ? digits.slice(-10) : digits;
+
+    // 1. primary email
+    if (email) {
+      const hit = await this.db
+        .selectFrom('clients')
+        .select('id')
+        .where('email', '=', email)
+        .executeTakeFirst();
+      if (hit) return { id: hit.id, created: false };
+
+      // 2. secondary emails array
+      const sec = await this.db
+        .selectFrom('clients')
+        .select('id')
+        .where(sql<boolean>`secondary_emails @> ${JSON.stringify([email])}::jsonb`)
+        .executeTakeFirst();
+      if (sec) return { id: sec.id, created: false };
+    }
+
+    // 3. phone (last 10 digits)
+    if (last10 && last10.length >= 10) {
+      const hit = await this.db
+        .selectFrom('clients')
+        .select('id')
+        // regexp_replace strips non-digits from the stored phone; endsWith by
+        // taking the right(..., 10). Avoids indexing but the phone list is
+        // small (~600 rows) so a seq scan is fine.
+        .where(
+          sql<boolean>`right(regexp_replace(coalesce(phone, ''), '\\D', '', 'g'), 10) = ${last10}`,
+        )
+        .executeTakeFirst();
+      if (hit) return { id: hit.id, created: false };
+    }
+
+    // No match — create a new retail record. Best-effort name split.
+    const { first, last } = splitName(input.name ?? '');
+    const created = await this.create({
+      first_name: first,
+      last_name: last,
+      email: email ?? undefined,
+      phone: phone ?? undefined,
+      client_type: 'retail',
+    });
+
+    if (input.actorUserId) {
+      await this.db
+        .insertInto('audit_logs')
+        .values({
+          actor_user_id: input.actorUserId,
+          action: 'client.auto_created.calendar',
+          entity_type: 'client',
+          entity_id: created.id,
+          metadata: sql`${JSON.stringify({ source: 'calendar_booking' })}::jsonb`,
+        })
+        .execute();
+    }
+
+    return { id: created.id, created: true };
   }
 
   /** Upgrade a walk-in client to a portal user. Returns the one-time initial password. */
@@ -648,4 +769,42 @@ export class ClientsService {
     // Ensure at least one digit + one letter by construction.
     return `${raw.slice(0, 10)}${Math.floor(Math.random() * 10)}A`;
   }
+}
+
+/**
+ * Lowercase, trim, dedupe, drop blanks, and remove `primary` (if set) from
+ * the secondary-email array. Returns a stable sorted array so equality
+ * checks on the JSONB value don't ping the column when nothing actually
+ * changed.
+ */
+function normalizeEmails(
+  raw: string[] | undefined,
+  primary: string | null | undefined,
+): string[] {
+  if (!raw) return [];
+  const primaryLower = primary?.trim().toLowerCase() ?? null;
+  const seen = new Set<string>();
+  for (const e of raw) {
+    if (typeof e !== 'string') continue;
+    const v = e.trim().toLowerCase();
+    if (!v) continue;
+    if (v === primaryLower) continue;
+    seen.add(v);
+  }
+  return Array.from(seen).sort();
+}
+
+/**
+ * Best-effort split of "First Last" (or "First Middle Last") into first +
+ * last. Used only when we auto-create a client from a calendar booking —
+ * operators can edit afterwards. If the input has only one token we put it
+ * in first_name and leave last_name blank (the DB accepts a null there as
+ * of migration 020).
+ */
+function splitName(raw: string): { first?: string; last?: string } {
+  const cleaned = raw.trim().replace(/\s+/g, ' ');
+  if (!cleaned) return {};
+  const parts = cleaned.split(' ');
+  if (parts.length === 1) return { first: parts[0] };
+  return { first: parts.slice(0, -1).join(' '), last: parts[parts.length - 1] };
 }

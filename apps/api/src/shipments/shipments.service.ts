@@ -12,6 +12,15 @@ import { toDbString } from '../common/money';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { CreateShipmentDto } from './dto/create-shipment.dto';
 import type { UpdateShipmentDto } from './dto/update-shipment.dto';
+import { validateDeliverySpeed } from './delivery-speeds';
+
+/**
+ * SQL expression for rendering a client's display name. Prefers the
+ * "first last" composite; falls back to company when both personal names
+ * are blank; lands on "(unnamed)" if nothing matches. Kept in one place
+ * so the shipments list + detail + notifications all format the same.
+ */
+const CLIENT_NAME_SQL = sql<string>`coalesce(nullif(trim(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')), ''), c.company, '(unnamed)')`;
 
 /** Public carrier tracking URLs for UI "track" links. */
 const CARRIER_URLS: Record<string, (n: string) => string> = {
@@ -55,12 +64,23 @@ export class ShipmentsService {
       throw new BadRequestException('Shipment already exists for this invoice');
     }
 
+    // Validate delivery_speed against the carrier whitelist (SHIP-001).
+    // The helper throws a plain Error with a message listing the valid
+    // options; wrap it in Nest's BadRequestException for proper 400.
+    let deliverySpeed: string | null;
+    try {
+      deliverySpeed = validateDeliverySpeed(dto.carrier, dto.delivery_speed);
+    } catch (err) {
+      throw new BadRequestException((err as Error).message);
+    }
+
     const created = await this.db
       .insertInto('shipments')
       .values({
         invoice_id: dto.invoice_id,
         carrier: dto.carrier,
         tracking_number: dto.tracking_number ?? null,
+        delivery_speed: deliverySpeed,
         status: 'label_created',
         weight_lbs: dto.weight_lbs !== undefined ? toDbString(dto.weight_lbs) : null,
         insurance_amount:
@@ -98,6 +118,7 @@ export class ShipmentsService {
 
     const patch: Partial<{
       tracking_number: string | null;
+      delivery_speed: string | null;
       status: ShipmentStatus;
       notes: string | null;
       shipped_at: Date;
@@ -105,6 +126,13 @@ export class ShipmentsService {
     }> = {};
     if (dto.tracking_number !== undefined) patch.tracking_number = dto.tracking_number || null;
     if (dto.notes !== undefined) patch.notes = dto.notes || null;
+    if (dto.delivery_speed !== undefined) {
+      try {
+        patch.delivery_speed = validateDeliverySpeed(current.carrier, dto.delivery_speed);
+      } catch (err) {
+        throw new BadRequestException((err as Error).message);
+      }
+    }
     if (dto.status) {
       patch.status = dto.status;
       if (dto.status === 'in_transit' && !current.shipped_at) patch.shipped_at = new Date();
@@ -158,7 +186,7 @@ export class ShipmentsService {
       .selectAll('s')
       .select([
         'i.invoice_number as invoice_number',
-        sql<string>`c.first_name || ' ' || c.last_name`.as('client_name'),
+        CLIENT_NAME_SQL.as('client_name'),
       ])
       .orderBy('s.created_at', 'desc')
       .limit(500)
@@ -173,7 +201,7 @@ export class ShipmentsService {
       .selectAll('s')
       .select([
         'i.invoice_number as invoice_number',
-        sql<string>`c.first_name || ' ' || c.last_name`.as('client_name'),
+        CLIENT_NAME_SQL.as('client_name'),
         'c.user_id as client_user_id',
       ])
       .where('s.id', '=', id)

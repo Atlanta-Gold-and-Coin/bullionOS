@@ -284,8 +284,9 @@ function CatalogSection({
   return (
     <section id={id} className="mt-4 scroll-mt-24">
       <h3 className="mb-2 text-sm font-semibold text-ink-700">{label}</h3>
-      <div className="overflow-hidden rounded-xl border border-ink-200 bg-white">
-        <table className="w-full text-sm">
+      {/* MOB-002: horizontal scroll on narrow viewports. */}
+      <div className="overflow-x-auto rounded-xl border border-ink-200 bg-white">
+        <table className="w-full min-w-[820px] text-sm">
           <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
             <tr>
               <th className="w-8 px-2 py-3" />
