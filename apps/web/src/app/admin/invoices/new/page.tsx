@@ -2,15 +2,17 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
 import { PageTint } from '@/components/page-tint';
 import { ProductCombobox } from '@/components/product-combobox';
+import { ClientCombobox, type ComboboxClient } from '@/components/client-combobox';
 
 /**
- * Shape of a source invoice we prefill from when ?from=<id> is in the URL.
- * Used by the Void & Recreate flow on /admin/invoices/[id]. Just the
- * fields we need; the full admin detail response has more.
+ * Source invoice shape used by both:
+ *   - void+recreate flow via ?from=<id>
+ *   - resume-draft flow via ?draftId=<id>
+ * Only the fields the wizard needs; the full admin detail response has more.
  */
 interface SourceInvoice {
   id: string;
@@ -27,7 +29,9 @@ interface SourceInvoice {
   }>;
   tax: string;
   shipping: string;
+  total: string;
   created_at: string;
+  client_email: string | null;
   line_items: Array<{
     product_id: string | null;
     quantity: number;
@@ -37,12 +41,8 @@ interface SourceInvoice {
   }>;
 }
 
-interface Client {
-  id: string;
-  first_name: string;
-  last_name: string;
-  email: string | null;
-  client_type?: 'retail' | 'wholesaler';
+interface ClientRow extends ComboboxClient {
+  secondary_emails?: string[] | null;
 }
 interface Product {
   id: string;
@@ -80,9 +80,7 @@ const PAYMENT_METHODS: Array<{ value: PaymentMethod; label: string }> = [
 interface DraftLine {
   product_id: string;
   quantity: number;
-  // Custom name for "New Item" walk-ins. Replaces the snapshot name.
   custom_name: string;
-  // Operator-entered unit price override. Empty string = use the live quote.
   override_unit_price: string;
 }
 
@@ -105,16 +103,6 @@ function blankPayment(): PaymentLeg {
   return { method: '', reference: '', amount: '' };
 }
 
-/**
- * Marshal the two wizard inputs into an ISO-8601 string the server can
- * parse. Interprets the local wall clock — the operator types "5:30 PM
- * on 2026-04-17" and we send whatever UTC instant that corresponds to
- * for the viewer's machine. Returns undefined when nothing was entered
- * so the server falls back to NOW().
- *
- * If only a date was entered, we default to noon local so the invoice
- * lands squarely in the intended day regardless of tz conversion.
- */
 function buildTransactedAt(date: string, time: string): string | undefined {
   if (!date && !time) return undefined;
   const d = date || new Date().toISOString().slice(0, 10);
@@ -124,35 +112,50 @@ function buildTransactedAt(date: string, time: string): string | undefined {
   return local.toISOString();
 }
 
+function money(n: number): string {
+  return `$${n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 export default function NewInvoicePage() {
   const router = useRouter();
   const qc = useQueryClient();
   const searchParams = useSearchParams();
   const fromId = searchParams.get('from');
+  const initialDraftId = searchParams.get('draftId');
 
   const [clientId, setClientId] = useState<string>('');
-  const [clientSearch, setClientSearch] = useState('');
   const [type, setType] = useState<'sell' | 'buy'>('sell');
   const [lines, setLines] = useState<DraftLine[]>([blankLine()]);
   const [payments, setPayments] = useState<PaymentLeg[]>([blankPayment()]);
   const [notes, setNotes] = useState('');
-  // Transaction date/time override. Empty = "now" at submit; operator can
-  // backdate for walk-ins being written up later. Two inputs (date + time)
-  // keep the wizard keyboard-friendly; we marshal to ISO on submit.
   const [txDate, setTxDate] = useState('');
   const [txTime, setTxTime] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [busy, setBusy] = useState<null | 'save' | 'create' | 'print' | 'email' | 'delete'>(
+    null,
+  );
   const [prefilled, setPrefilled] = useState(false);
+  // Identity of the persisted draft backing this wizard (if any). Save
+  // writes a new draft and updates this; subsequent Saves swap the row
+  // (POST new, then DELETE old) so invoice_number stays pristine until
+  // finalize. See INV-005 / INV-006 / INV-007.
+  const [draftId, setDraftId] = useState<string | null>(initialDraftId);
 
-  // Void & recreate lands here with ?from=<old_invoice_id>. Fetch the
-  // old invoice once and seed the wizard state as a starting point.
-  // The original has already been canceled on the detail page before
-  // the redirect ran.
+  // Email controls (INV-007).
+  const [emailTo, setEmailTo] = useState('');
+  const [saveEmailToClient, setSaveEmailToClient] = useState(true);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  // Void+recreate lands here with ?from=<id>. Resume-draft lands with
+  // ?draftId=<id>. Either way we fetch and seed the wizard state.
+  const sourceQueryId = fromId ?? initialDraftId;
   const { data: source } = useQuery({
-    queryKey: ['admin', 'invoice', fromId],
-    queryFn: () => apiFetch<SourceInvoice>(`/admin/invoices/${fromId}`),
-    enabled: Boolean(fromId),
+    queryKey: ['admin', 'invoice', sourceQueryId],
+    queryFn: () => apiFetch<SourceInvoice>(`/admin/invoices/${sourceQueryId}`),
+    enabled: Boolean(sourceQueryId),
   });
 
   useEffect(() => {
@@ -160,9 +163,6 @@ export default function NewInvoicePage() {
     setClientId(source.client_id);
     setType(source.type);
     setNotes(source.notes ?? '');
-    // Preserve the original transaction time so the restated ticket
-    // lines up with the actual moment of sale. Operator can click Now
-    // to override.
     if (source.created_at) {
       const d = new Date(source.created_at);
       if (!Number.isNaN(d.getTime())) {
@@ -176,19 +176,13 @@ export default function NewInvoicePage() {
         );
       }
     }
-    // Map each old line to a draft line. Unit price becomes the override
-    // so the restated ticket honors the previous manual edits without
-    // needing to re-quote from current spot. Product-less (ad-hoc) lines
-    // round-trip via custom_name with no product binding.
     const seededLines: DraftLine[] = source.line_items.map((l) => ({
       product_id: l.product_id ?? '',
       quantity: l.quantity,
       custom_name: l.product_id ? '' : l.product_name_snapshot,
       override_unit_price: String(Number(l.unit_price).toFixed(2)),
     }));
-    if (seededLines.length > 0) setLines(seededLines);
-    // Prefill payment legs from the multi-payment array first; fall
-    // back to the legacy single-method column if it's empty.
+    if (seededLines.length > 0) setLines([...seededLines, blankLine()]);
     if (source.payment_methods && source.payment_methods.length > 0) {
       setPayments(
         source.payment_methods.map((m) => ({
@@ -202,15 +196,18 @@ export default function NewInvoicePage() {
         { method: source.payment_method as PaymentMethod, reference: '', amount: '' },
       ]);
     }
+    // If resuming a draft, track its id so subsequent Saves swap it.
+    if (initialDraftId && source.status === 'draft') {
+      setDraftId(source.id);
+    }
     setPrefilled(true);
-  }, [source, prefilled]);
+  }, [source, prefilled, initialDraftId]);
+
+  // ---------- reference data ----------
 
   const { data: clients } = useQuery({
-    queryKey: ['admin', 'clients', clientSearch],
-    queryFn: () =>
-      apiFetch<Client[]>(
-        `/admin/clients${clientSearch ? `?q=${encodeURIComponent(clientSearch)}` : ''}`,
-      ),
+    queryKey: ['admin', 'clients', 'all'],
+    queryFn: () => apiFetch<ClientRow[]>('/admin/clients'),
   });
   const { data: products } = useQuery({
     queryKey: ['admin', 'products'],
@@ -218,20 +215,90 @@ export default function NewInvoicePage() {
   });
 
   const selectedClient = useMemo(
-    () => (clients ?? []).find((c) => c.id === clientId),
+    () => (clients ?? []).find((c) => c.id === clientId) ?? null,
     [clients, clientId],
   );
 
-  // Auto-add a new blank line the moment the last existing line has both a
-  // product selected and a non-zero quantity. Keeps the keyboard flow fast:
-  // pick product → type qty → Tab straight onto the next row.
+  // Prefill the email field when a client is selected (INV-007 req).
+  useEffect(() => {
+    if (selectedClient && !emailTo) {
+      setEmailTo(selectedClient.email ?? '');
+    }
+    // When the client changes to one with a different primary, replace
+    // the field — operator can still edit afterwards.
+    if (selectedClient && emailTo && selectedClient.email && emailTo !== selectedClient.email) {
+      // Only auto-replace when we haven't received custom input yet.
+      // Heuristic: if the current value matches ANY known client email,
+      // it's a prefill we can safely overwrite.
+      const allKnown = new Set(
+        (clients ?? []).flatMap((c) => [c.email, ...(c.secondary_emails ?? [])]).filter(Boolean),
+      );
+      if (allKnown.has(emailTo)) setEmailTo(selectedClient.email);
+    }
+  }, [selectedClient, clients, emailTo]);
+
+  // ---------- quotes (hoisted) ----------
+
+  // One query per distinct (product_id, quantity) pair used on the page.
+  // Hoisting lets the parent component compute the running total, while
+  // still letting each LineRow render the live unit price. Cached per-key
+  // so editing other rows doesn't re-fetch.
+  const quoteKeys = useMemo(
+    () =>
+      lines
+        .filter((l) => l.product_id && l.quantity > 0)
+        .map((l) => ({ pid: l.product_id, qty: l.quantity })),
+    [lines],
+  );
+  const quoteResults = useQueries({
+    queries: quoteKeys.map((k) => ({
+      queryKey: ['quote', k.pid, k.qty] as const,
+      queryFn: () =>
+        apiFetch<Quote>(`/admin/products/${k.pid}/quote?quantity=${k.qty}`),
+      staleTime: Infinity,
+      refetchInterval: false as const,
+    })),
+  });
+  const quoteMap = useMemo(() => {
+    const m = new Map<string, Quote>();
+    quoteKeys.forEach((k, i) => {
+      const q = quoteResults[i]?.data;
+      if (q) m.set(`${k.pid}:${k.qty}`, q);
+    });
+    return m;
+  }, [quoteKeys, quoteResults]);
+
+  // ---------- derived totals (INV-001) ----------
+
+  const lineTotals = useMemo(
+    () =>
+      lines.map((l) => {
+        if (!l.product_id || l.quantity <= 0) return 0;
+        const q = quoteMap.get(`${l.product_id}:${l.quantity}`);
+        const liveUnit = q
+          ? Number(type === 'sell' ? q.sell_unit_price : q.buy_unit_price)
+          : null;
+        const override =
+          l.override_unit_price.trim() !== '' ? Number(l.override_unit_price) : null;
+        const unit = override ?? liveUnit ?? null;
+        return unit === null ? 0 : unit * l.quantity;
+      }),
+    [lines, quoteMap, type],
+  );
+  const subtotal = useMemo(() => lineTotals.reduce((s, x) => s + x, 0), [lineTotals]);
+  // tax/shipping are not editable in the wizard; default 0. Running total
+  // == subtotal for now. The service recomputes on the server; this is
+  // just a preview for the operator.
+  const runningTotal = subtotal;
+
+  // ---------- line/payment mutation helpers ----------
+
   useEffect(() => {
     if (lines.length === 0) return;
     const last = lines[lines.length - 1];
     if (last.product_id && last.quantity > 0) {
       setLines((ls) => [...ls, blankLine()]);
     }
-    // Intentionally only runs when the last line's product/qty changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lines[lines.length - 1]?.product_id, lines[lines.length - 1]?.quantity]);
 
@@ -252,10 +319,27 @@ export default function NewInvoicePage() {
     setPayments((p) => (p.length === 1 ? [blankPayment()] : p.filter((_, i) => i !== idx)));
   }
 
+  // Fill the most recent payment leg's amount with the running total
+  // minus whatever the other legs already cover (INV-002). If all legs
+  // have amounts, we target the last one regardless — operator clicked
+  // the button; they want the total to land somewhere obvious.
+  function fillTotalIntoPayment() {
+    if (runningTotal <= 0) return;
+    const covered = payments
+      .slice(0, -1)
+      .map((p) => Number(p.amount) || 0)
+      .reduce((s, x) => s + x, 0);
+    const remaining = Math.max(0, runningTotal - covered);
+    setPayments((ps) => {
+      const copy = [...ps];
+      copy[copy.length - 1] = { ...copy[copy.length - 1], amount: remaining.toFixed(2) };
+      return copy;
+    });
+  }
+
+  // ---------- validation + payload ----------
+
   const filledLines = lines.filter((l) => l.product_id && l.quantity > 0);
-  // Any line where the user clicked "New Item" but didn't also pick a
-  // catalog product from the dropdown below. Catch these at submit-time
-  // so the row doesn't silently get filtered out of the payload.
   const orphanedAdHoc = lines.filter(
     (l) => !l.product_id && l.custom_name.trim().length > 0,
   );
@@ -267,108 +351,247 @@ export default function NewInvoicePage() {
       amount: Number(p.amount),
     }));
 
-  async function submit() {
-    setError(null);
-    if (!clientId) return setError('Select a client');
-    if (orphanedAdHoc.length > 0) {
-      return setError(
-        'For "New item" lines, also pick a catalog product so we can snapshot the metal and weight. The name you typed will still be shown.',
-      );
-    }
-    if (filledLines.length === 0) return setError('Add at least one line item');
-    if (validPayments.length === 0)
-      return setError('Payment method is required (at least one leg with an amount).');
-
-    setSubmitting(true);
-    try {
-      const body = {
-        client_id: clientId,
-        type,
-        // Pass the first entry's method as legacy primary for back-compat;
-        // server derives it the same way but being explicit keeps the PDF
-        // header correct if the multi-payment array gets truncated.
-        payment_method: validPayments[0].method,
-        payment_methods: validPayments,
-        notes: notes || undefined,
-        transacted_at: buildTransactedAt(txDate, txTime),
-        line_items: filledLines.map((l) => {
-          const base: Record<string, unknown> = {
-            product_id: l.product_id,
-            quantity: l.quantity,
-          };
-          if (l.custom_name.trim()) base.custom_name = l.custom_name.trim();
-          if (l.override_unit_price.trim()) {
-            const n = Number(l.override_unit_price);
-            if (Number.isFinite(n) && n >= 0) {
-              base.override_unit_price = n;
-              base.override_reason = l.custom_name.trim()
-                ? `Manual entry: ${l.custom_name.trim()}`
-                : 'Operator-entered price';
-            }
+  function buildPayload() {
+    return {
+      client_id: clientId,
+      type,
+      payment_method: validPayments[0]?.method,
+      payment_methods: validPayments,
+      notes: notes || undefined,
+      transacted_at: buildTransactedAt(txDate, txTime),
+      line_items: filledLines.map((l) => {
+        const base: Record<string, unknown> = {
+          product_id: l.product_id,
+          quantity: l.quantity,
+        };
+        if (l.custom_name.trim()) base.custom_name = l.custom_name.trim();
+        if (l.override_unit_price.trim()) {
+          const n = Number(l.override_unit_price);
+          if (Number.isFinite(n) && n >= 0) {
+            base.override_unit_price = n;
+            base.override_reason = l.custom_name.trim()
+              ? `Manual entry: ${l.custom_name.trim()}`
+              : 'Operator-entered price';
           }
-          return base;
-        }),
-      };
+        }
+        return base;
+      }),
+    };
+  }
+
+  function validate(forSave: boolean): string | null {
+    if (!clientId) return 'Select a client';
+    if (orphanedAdHoc.length > 0) {
+      return 'For "New item" lines, also pick a catalog product so we can snapshot the metal and weight.';
+    }
+    if (filledLines.length === 0) return 'Add at least one line item';
+    // Saving a draft is allowed with an empty payment section (operator
+    // may still be choosing). Create requires at least one leg.
+    if (!forSave && validPayments.length === 0) {
+      return 'Payment method is required (at least one leg with an amount).';
+    }
+    return null;
+  }
+
+  /**
+   * Persist the current wizard state as a draft. If there is already a
+   * draft backing this wizard (draftId set), we POST the new one FIRST
+   * and then DELETE the old — that way a POST failure doesn't lose work,
+   * and an orphaned old draft is the worst-case outcome. Returns the new
+   * draft's id so the caller can chain Print/Email on it.
+   */
+  async function persistDraft(): Promise<string> {
+    const payload = buildPayload();
+    const created = await apiFetch<{ id: string; invoice_number: string }>(
+      '/admin/invoices',
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+    const previousDraft = draftId;
+    setDraftId(created.id);
+    // Sync the URL so ?draftId reflects reality, but don't cause a
+    // server-side navigation — replaceState keeps the client state.
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('draftId', created.id);
+      u.searchParams.delete('from'); // void+recreate flow ends at first save
+      window.history.replaceState({}, '', u.toString());
+    } catch {
+      /* noop in non-browser test envs */
+    }
+    if (previousDraft && previousDraft !== created.id) {
+      try {
+        await apiFetch(`/admin/invoices/${previousDraft}`, { method: 'DELETE' });
+      } catch {
+        // Orphan is harmless — it's a draft. Do not surface to user.
+      }
+    }
+    await qc.invalidateQueries({ queryKey: ['admin', 'invoices'] });
+    return created.id;
+  }
+
+  // ---------- action handlers ----------
+
+  async function handleSave() {
+    setError(null);
+    setFlash(null);
+    const v = validate(true);
+    if (v) return setError(v);
+    setBusy('save');
+    try {
+      await persistDraft();
+      setFlash('Draft saved.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to save draft');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleCreate() {
+    setError(null);
+    setFlash(null);
+    const v = validate(false);
+    if (v) return setError(v);
+    setBusy('create');
+    try {
+      // Always POST a fresh invoice (no reuse of existing draft row) so
+      // the finalize transaction is atomic and audits cleanly.
+      const payload = buildPayload();
       const created = await apiFetch<{ id: string }>('/admin/invoices', {
         method: 'POST',
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
       });
+      // Draft → finalized. The service handles inventory reservation.
+      await apiFetch(`/admin/invoices/${created.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'finalized' }),
+      });
+      // If we were backing a draft, clean it up.
+      if (draftId && draftId !== created.id) {
+        try {
+          await apiFetch(`/admin/invoices/${draftId}`, { method: 'DELETE' });
+        } catch {
+          /* ignore orphan */
+        }
+      }
       await qc.invalidateQueries({ queryKey: ['admin', 'invoices'] });
       router.push(`/admin/invoices/${created.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create invoice');
     } finally {
-      setSubmitting(false);
+      setBusy(null);
     }
   }
 
+  async function handlePrint() {
+    setError(null);
+    setFlash(null);
+    const v = validate(true);
+    if (v) return setError(v);
+    setBusy('print');
+    try {
+      const id = await persistDraft();
+      // Open the PDF in a new tab — does NOT finalize (INV-006).
+      window.open(`/api/v1/admin/invoices/${id}/pdf`, '_blank', 'noopener');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to open print view');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleEmail() {
+    setError(null);
+    setFlash(null);
+    const v = validate(true);
+    if (v) return setError(v);
+    const to = emailTo.trim().toLowerCase();
+    if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      return setError('Enter a valid email address.');
+    }
+    setBusy('email');
+    try {
+      const id = await persistDraft();
+      const result = await apiFetch<{ sent_to: string; saved_to_client: boolean }>(
+        `/admin/invoices/${id}/email`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ to, save_to_client: saveEmailToClient }),
+        },
+      );
+      setFlash(
+        result.saved_to_client
+          ? `Emailed to ${result.sent_to}. Saved as a secondary address on the client.`
+          : `Emailed to ${result.sent_to}.`,
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to email invoice');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleDelete() {
+    if (!draftId) return;
+    const ok = window.confirm('Delete this draft? This cannot be undone.');
+    if (!ok) return;
+    setError(null);
+    setBusy('delete');
+    try {
+      await apiFetch(`/admin/invoices/${draftId}`, { method: 'DELETE' });
+      await qc.invalidateQueries({ queryKey: ['admin', 'invoices'] });
+      router.push('/admin/invoices?status=draft');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete draft');
+      setBusy(null);
+    }
+  }
+
+  // ---------- render ----------
+
   return (
     <PageTint side={type === 'buy' ? 'buy' : 'sell'}>
-      <div className="mx-auto max-w-4xl">
+      <div className="mx-auto max-w-4xl pb-32">
         <h1 className="text-2xl font-semibold">
-          {source ? 'Recreate invoice' : 'New invoice'}
+          {fromId ? 'Recreate invoice' : draftId ? 'Edit draft' : 'New invoice'}
         </h1>
         <p className="mt-1 text-sm text-ink-400">
-          {source
-            ? `Fields pre-filled from ${source.invoice_number} (now canceled). Make your edits, then submit to create a new ticket. The old invoice stays in history as CANCELED.`
-            : 'Prices computed against live spot at submission time. Override any unit price inline if needed.'}
+          {fromId
+            ? `Fields pre-filled from ${source?.invoice_number ?? 'a prior invoice'} (now canceled). Make your edits, then submit to create a new ticket. The old invoice stays in history as CANCELED.`
+            : draftId
+              ? `Editing an existing draft. Save updates it; Create finalizes; Delete removes it.`
+              : 'Prices computed against live spot at submission time. Override any unit price inline if needed.'}
         </p>
-        {source && source.status !== 'canceled' && (
+        {fromId && source && source.status !== 'canceled' && (
           <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            The source invoice isn&rsquo;t canceled yet — submitting will leave two open tickets.
-            Go back to the original and void it first.
+            The source invoice isn&rsquo;t canceled yet — submitting will leave two open
+            tickets. Go back to the original and void it first.
           </div>
         )}
 
+        {/* 1 · Client (INV-004 unified combobox) */}
         <section className="mt-6 rounded-xl border border-ink-200 bg-white p-5">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
             1 · Client
           </h2>
-          <div className="mt-3 flex flex-col gap-2 md:flex-row">
-            <input
-              value={clientSearch}
-              onChange={(e) => setClientSearch(e.target.value)}
-              placeholder="Search name / email"
-              className="input flex-1"
-            />
-            <select
+          <div className="mt-3">
+            <ClientCombobox
+              clients={clients ?? []}
               value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              className="input md:w-80"
-            >
-              <option value="">— select client —</option>
-              {(clients ?? []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.last_name}, {c.first_name}
-                  {c.client_type === 'wholesaler' ? ' · wholesale' : ''}
-                  {c.email ? ` · ${c.email}` : ''}
-                </option>
-              ))}
-            </select>
+              onChange={setClientId}
+            />
           </div>
           {selectedClient && (
             <p className="mt-2 text-xs text-ink-400">
-              Selected: {selectedClient.first_name} {selectedClient.last_name}
+              Selected:{' '}
+              {[selectedClient.first_name, selectedClient.last_name]
+                .filter(Boolean)
+                .join(' ') ||
+                selectedClient.company ||
+                '(unnamed)'}
+              {selectedClient.company &&
+                (selectedClient.first_name || selectedClient.last_name) &&
+                ` · ${selectedClient.company}`}
               {selectedClient.client_type === 'wholesaler' && (
                 <span className="ml-2 rounded-full bg-gold-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gold-600">
                   Wholesale
@@ -378,6 +601,7 @@ export default function NewInvoicePage() {
           )}
         </section>
 
+        {/* 2 · Direction */}
         <section className="mt-4 rounded-xl border border-ink-200 bg-white p-5">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
             2 · Direction
@@ -392,45 +616,70 @@ export default function NewInvoicePage() {
           </div>
         </section>
 
+        {/* 3 · Line items */}
         <section className="mt-4 rounded-xl border border-ink-200 bg-white p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
               3 · Line items
             </h2>
-            <span className="text-xs text-ink-400">
+            <span className="hidden text-xs text-ink-400 md:inline">
               New line auto-adds once the previous one is filled.
             </span>
           </div>
 
-          <div className="mt-3 space-y-3">
-            {lines.map((line, idx) => (
-              <LineRow
-                key={idx}
-                line={line}
-                products={products ?? []}
-                type={type}
-                onChange={(patch) => updateLine(idx, patch)}
-                onRemove={() => removeLine(idx)}
-              />
-            ))}
+          {/* Mobile scroll wrapper (MOB-001). On narrow viewports the wide
+              line row would otherwise clip at the edges. */}
+          <div className="mt-3 -mx-2 overflow-x-auto px-2">
+            <div className="min-w-[640px] space-y-3">
+              {lines.map((line, idx) => (
+                <LineRow
+                  key={idx}
+                  line={line}
+                  products={products ?? []}
+                  type={type}
+                  quote={
+                    line.product_id && line.quantity > 0
+                      ? quoteMap.get(`${line.product_id}:${line.quantity}`) ?? null
+                      : null
+                  }
+                  onChange={(patch) => updateLine(idx, patch)}
+                  onRemove={() => removeLine(idx)}
+                />
+              ))}
+            </div>
           </div>
         </section>
 
+        {/* 4 · Payment */}
         <section className="mt-4 rounded-xl border border-ink-200 bg-white p-5">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
               4 · Payment <span className="text-red-600">*</span>
             </h2>
-            <button
-              onClick={addPayment}
-              disabled={payments.length >= 3}
-              className="rounded-md border border-ink-200 px-3 py-1 text-xs hover:bg-ink-50 disabled:opacity-60"
-            >
-              + Add split
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={fillTotalIntoPayment}
+                disabled={runningTotal <= 0}
+                title="Fill the last payment leg with the current invoice total"
+                className="rounded-md border border-ink-200 px-3 py-1 text-xs hover:bg-ink-50 disabled:opacity-60"
+              >
+                Total
+              </button>
+              <button
+                type="button"
+                onClick={addPayment}
+                disabled={payments.length >= 3}
+                className="rounded-md border border-ink-200 px-3 py-1 text-xs hover:bg-ink-50 disabled:opacity-60"
+              >
+                + Add split
+              </button>
+            </div>
           </div>
           <p className="mt-1 text-xs text-ink-400">
             Required. Add a second or third leg for split tenders (e.g. cash + check).
+            Click <strong>Total</strong> to fill the remaining balance into the last
+            leg.
           </p>
           <div className="mt-3 space-y-2">
             {payments.map((p, idx) => (
@@ -444,6 +693,7 @@ export default function NewInvoicePage() {
           </div>
         </section>
 
+        {/* Tx date/time */}
         <section className="mt-4 rounded-xl border border-ink-200 bg-white p-5">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
             Transaction date &amp; time
@@ -500,6 +750,9 @@ export default function NewInvoicePage() {
           </div>
         </section>
 
+        {/* Notes — whitespace-pre-wrap preserves line breaks the operator
+            types (INV-009). The textarea itself already wraps; the
+            surrounding container now won't clip when notes go long. */}
         <section className="mt-4 rounded-xl border border-ink-200 bg-white p-5">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
             Notes
@@ -509,35 +762,112 @@ export default function NewInvoicePage() {
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
             placeholder="Anything that should print on the PDF under NOTES…"
-            className="input mt-3"
+            className="input mt-3 w-full whitespace-pre-wrap break-words"
           />
         </section>
 
+        {/* Flash / error */}
+        {flash && (
+          <div className="mt-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
+            {flash}
+          </div>
+        )}
         {error && (
           <div role="alert" className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
           </div>
         )}
+      </div>
 
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            onClick={() => router.back()}
-            className="rounded-md border border-ink-200 px-4 py-2 text-sm text-ink-700 hover:bg-ink-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={submit}
-            disabled={submitting}
-            className="rounded-md bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-800 disabled:opacity-60"
-          >
-            {submitting ? 'Creating…' : 'Create invoice'}
-          </button>
+      {/* Sticky action rail — running total above bottom buttons (INV-001,
+          INV-005, INV-008). Padding-bottom on the main column above keeps
+          the last field from hiding under the rail. */}
+      <div className="fixed inset-x-0 bottom-0 z-10 border-t border-ink-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-4xl flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between">
+          <div className="text-sm">
+            <span className="text-ink-400">Running total:</span>{' '}
+            <span className="font-mono text-lg font-semibold text-ink-900">
+              {money(runningTotal)}
+            </span>
+            {filledLines.length > 0 && (
+              <span className="ml-2 text-xs text-ink-400">
+                · {filledLines.length} line{filledLines.length === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+
+          {/* Order required by INV-008: Cancel · Save · Print · Create · Email+input */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => router.back()}
+              className="rounded-md border border-ink-200 px-3 py-2 text-sm text-ink-700 hover:bg-ink-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!!busy}
+              className="rounded-md border border-ink-200 px-3 py-2 text-sm text-ink-700 hover:bg-ink-50 disabled:opacity-60"
+            >
+              {busy === 'save' ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              onClick={handlePrint}
+              disabled={!!busy}
+              className="rounded-md border border-ink-200 px-3 py-2 text-sm text-ink-700 hover:bg-ink-50 disabled:opacity-60"
+            >
+              {busy === 'print' ? 'Preparing…' : 'Print'}
+            </button>
+            <button
+              onClick={handleCreate}
+              disabled={!!busy}
+              className="rounded-md bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-800 disabled:opacity-60"
+            >
+              {busy === 'create' ? 'Creating…' : 'Create'}
+            </button>
+            <div className="flex items-center gap-1">
+              <input
+                type="email"
+                value={emailTo}
+                onChange={(e) => setEmailTo(e.target.value)}
+                placeholder="recipient@example.com"
+                className="input w-56 md:w-64"
+                aria-label="Email recipient"
+              />
+              <button
+                onClick={handleEmail}
+                disabled={!!busy}
+                className="rounded-md border border-ink-200 px-3 py-2 text-sm text-ink-700 hover:bg-ink-50 disabled:opacity-60"
+              >
+                {busy === 'email' ? 'Sending…' : 'Email'}
+              </button>
+            </div>
+            {draftId && (
+              <button
+                onClick={handleDelete}
+                disabled={!!busy}
+                className="rounded-md border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+              >
+                {busy === 'delete' ? 'Deleting…' : 'Delete draft'}
+              </button>
+            )}
+          </div>
+          {/* Tiny checkbox for save-as-secondary-email */}
+          <label className="ml-auto flex items-center gap-1 text-xs text-ink-500 md:ml-0">
+            <input
+              type="checkbox"
+              checked={saveEmailToClient}
+              onChange={(e) => setSaveEmailToClient(e.target.checked)}
+            />
+            Save new addresses to client record
+          </label>
         </div>
       </div>
     </PageTint>
   );
 }
+
+// ---------- subcomponents ----------
 
 function TypeToggle({
   active,
@@ -564,30 +894,19 @@ function LineRow({
   line,
   products,
   type,
+  quote,
   onChange,
   onRemove,
 }: {
   line: DraftLine;
   products: Product[];
   type: 'buy' | 'sell';
+  /** Current live quote for (product_id, quantity). Lifted to parent. */
+  quote: Quote | null;
   onChange: (patch: Partial<DraftLine>) => void;
   onRemove: () => void;
 }) {
   const isAdHoc = line.product_id === '' && !!line.custom_name;
-
-  const { data: quote } = useQuery({
-    queryKey: ['quote', line.product_id, line.quantity],
-    queryFn: () =>
-      apiFetch<Quote>(
-        `/admin/products/${line.product_id}/quote?quantity=${line.quantity}`,
-      ),
-    enabled: Boolean(line.product_id && line.quantity > 0),
-    // Quote is already live-priced server-side. No refetch — invoice wizard
-    // locks prices at line-add time to avoid surprise changes mid-ticket.
-    staleTime: Infinity,
-    refetchInterval: false,
-  });
-
   const liveUnit = type === 'sell' ? quote?.sell_unit_price : quote?.buy_unit_price;
   const effectiveUnit =
     line.override_unit_price.trim() !== ''
@@ -598,10 +917,12 @@ function LineRow({
   const lineTotal =
     effectiveUnit !== null ? effectiveUnit * line.quantity : undefined;
 
+  // Grid: wider Total column, separated × button (INV-003 fix).
+  // 5 · product  /  2 · qty  /  2 · unit  /  2 · total  /  1 · ×
   return (
     <div className="rounded-md border border-ink-100 p-3">
       <div className="grid grid-cols-12 items-center gap-3">
-        <div className="col-span-6">
+        <div className="col-span-5">
           <ProductCombobox
             products={products}
             value={line.product_id}
@@ -634,9 +955,12 @@ function LineRow({
           className="input col-span-2 font-mono"
           aria-label="Unit price (leave blank for live quote)"
         />
-        <div className="col-span-1 text-right font-mono text-sm text-ink-600">
+        <div className="col-span-2 pr-2 text-right font-mono text-sm text-ink-600">
           {lineTotal !== undefined
-            ? `$${lineTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            ? `$${lineTotal.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}`
             : '—'}
         </div>
         <button
@@ -658,9 +982,7 @@ function LineRow({
             maxLength={200}
           />
           {line.override_unit_price.trim() === '' && (
-            <span className="text-xs text-red-600">
-              Enter a unit price →
-            </span>
+            <span className="text-xs text-red-600">Enter a unit price →</span>
           )}
         </div>
       )}

@@ -4,12 +4,12 @@
 > this project, read this document end-to-end once and you'll have what you
 > need to make changes safely.
 >
-> **Last updated:** 2026-04-18
-> **Latest commit at time of writing:** `31b67e7`
+> **Last updated:** 2026-04-19
+> **Latest commit at time of writing:** (see §25 below — this session's
+> commit lands Phases 1–4 of the big production release)
 >
-> Read the **Changelog Addendum** (bottom of this file) first if you already
-> read the main doc at commit `e48d4c1` — it covers everything that's
-> shifted since.
+> Read the **Changelog Addenda** (bottom of this file) first if you already
+> read the main doc — §24 covers the prior session, §25 covers this one.
 
 ---
 
@@ -1336,3 +1336,162 @@ Settings         → /admin/settings
 
 - **WordPress plugin not yet installed** on atlantagoldandcoin.com. Code
   is at `wordpress-plugin/agc-inventory/` ready to zip + upload.
+
+---
+
+## 25. Changelog Addendum (2026-04-19 — "Big Release" phases 1–4)
+
+Everything below shipped after §24. Read this section first if you already
+read the main doc. **Phase 5 (PDF layout changes + QR code) is explicitly
+deferred** to a future session — not in this commit. Phase 6 (operator QA
+against production) is also pending.
+
+### Scope
+
+A 30-ticket production release spanning 8 groups (INV, PDF, SHIP, PROD, WH,
+CLIENT, MOB, CAL). Ticket PDF-001 is deferred; everything else — schema,
+backend, wizard, detail page, wholesale reconciliation, client model,
+calendar↔CRM linking, mobile scroll — shipped in phases 1–4.
+
+### Migrations (all additive; see `apps/api/src/db/migrations/`)
+
+| # | Name | What |
+|---|---|---|
+| 020 | `020_client_company_and_emails.ts` | `clients.company TEXT`, `clients.secondary_emails JSONB NOT NULL DEFAULT '[]'`, relax `first_name`/`last_name` NOT NULL + add `clients_has_identity` CHECK (at least one of first/last/company must be non-empty), **rebuild `search_text` GENERATED column to include `company`** (drop + recreate — Postgres can't alter a GENERATED expression in place). |
+| 021 | `021_shipment_delivery_speed.ts` | `shipments.delivery_speed TEXT NULL`. Validation of carrier↔speed pairing lives in `apps/api/src/shipments/delivery-speeds.ts` (not a DB CHECK — carriers rename services often). |
+| 022 | `022_wholesale_paid_audit.ts` | `invoices.paid_by_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL` + partial index `invoices_outstanding_by_client_idx (client_id) WHERE status='finalized'` to make the wholesale AR rollup cheap. |
+| 023 | `023_calendar_bookings.ts` | New `calendar_bookings` table with `id UUID PK`, `google_event_id TEXT UNIQUE`, `client_id UUID NULL FK clients ON DELETE SET NULL`, `service`, `starts_at`, `ends_at`, `name`, `email`, `phone`, `notes`, `status DEFAULT 'confirmed'`, `source DEFAULT 'public_booking'`, timestamps. Indexes on `client_id` and `starts_at DESC`. |
+
+**Applying to prod:** run via Railway proxy per §15. They are idempotent
+and reversible (`down()` implemented for each).
+
+### New backend surfaces
+
+- `DELETE /admin/invoices/:id` — hard-delete a draft. Service guards `status='draft'` only.
+- `POST /admin/invoices/:id/email` — render PDF + email to a recipient. Body `{ to, save_to_client?: boolean }`. Never mutates invoice state (works on drafts). When `save_to_client=true` and address is new, appended to client's `secondary_emails`.
+- `GET /admin/kpi/wholesale-owed` — total + per-client breakdown of finalized (not-paid) wholesale invoices. Powers the KPI card and reconciliation page.
+- `GET /admin/shipments/delivery-speeds` — carrier→speeds whitelist (so the UI builds the dropdown without hardcoding). Declared **before** `:id` or Nest's UUID pipe rejects the slug.
+- `GET /admin/clients/:id/appointments` — calendar bookings linked to the client (from `calendar_bookings` mirror).
+- `GET /admin/calendar/bookings/pending` — bookings that failed to auto-link; admin reconciliation tray.
+- `PATCH /admin/calendar/bookings/:id/client` — manually attach/detach a booking from a client.
+
+**Existing endpoints changed:**
+
+- `PATCH /admin/invoices/:id/status` now stamps `paid_by_user_id=<actor>` when transitioning to `paid` (WH-002 audit).
+- `GET /admin/invoices/:id` detail response now includes `client_type` and `client_company`.
+- `GET /admin/invoices` list response's `client_name` falls back to `company` when `first/last` are blank.
+- `POST /public/calendar/book` now also writes to `calendar_bookings` + tries to auto-link to a client. Mirror failures are swallowed — the Google event stays authoritative.
+
+### New service methods
+
+- `InvoicesService.deleteDraft(id, actor)` — service guard `status='draft'`, hard-delete + audit.
+- `InvoicesService.emailInvoice(id, { to, saveToClient }, actor)` — renders PDF to Buffer, attaches via `EmailService.send(attachments)`, optionally appends to `clients.secondary_emails`.
+- `InvoicesService.listOutstandingWholesale()` — single source of truth for wholesale AR.
+- `ClientsService.findOrCreateByContact({ name, email, phone, actorUserId })` — returns `{ id, created }`. Match order: primary email → secondary_emails → phone (last-10 digits). **No fuzzy matching** by design — see risks below.
+- `CalendarBookingsService.recordPublicBooking()` / `listForClient(id)` / `listPending()` / `linkToClient(id, clientId, actor)`.
+
+### Client model changes (backward-compatible)
+
+- Added `company: string | null` and `secondary_emails: string[]` to `ClientsTable`.
+- `first_name` + `last_name` are now nullable (enforced via CHECK `clients_has_identity`).
+- Existing retail clients unchanged. To classify a client as wholesale, set `client_type='wholesaler'`; `company` becomes their primary identity and the name fields are optional.
+
+### Invoice wizard rewrite (`apps/web/src/app/admin/invoices/new/page.tsx`)
+
+Substantial refactor (~720 → ~950 lines). What changed:
+
+1. **Running total** (INV-001) — quotes hoisted to parent via `useQueries`; `subtotal = Σ lineTotal` displayed in a sticky action rail at the bottom.
+2. **Total button** (INV-002) — next to "Add split" in Step 4. Fills the last payment leg with `total − already-covered`.
+3. **Line spacing** (INV-003) — grid changed from 6/2/2/1/1 to 5/2/2/2/1 so the total column no longer runs into the × button.
+4. **Unified client combobox** (INV-004) — new `ClientCombobox` at `apps/web/src/components/client-combobox.tsx`. Fuzzy scorer across first/last/company/email local-part/phone digits.
+5. **Draft lifecycle** (INV-005) — sticky bottom rail has `Cancel · Save · Print · Create · Email + input`. Save posts at `status='draft'`. URL updates to `?draftId=<id>` so reload resumes. Subsequent Save POSTs a fresh draft + DELETEs the old (invoice_number regenerates; drafts aren't operator-visible yet, acceptable). Delete button appears once there's a backing draftId.
+6. **Print without finalize** (INV-006) — calls persistDraft() + opens `/api/v1/admin/invoices/:id/pdf` in new tab. No status mutation.
+7. **Email** (INV-007) — calls persistDraft() + POST `/email`. Email input prefills from `client.email`. Checkbox "Save new addresses to client record" defaults true.
+8. **Button order** (INV-008) — Cancel · Save · Print · Create · Email + input (exactly the spec).
+9. **Notes wrap** (INV-009) — `whitespace-pre-wrap break-words` on the textarea AND on the detail page's notes render.
+10. **Line row mobile scroll** (MOB-001) — line items wrapped in `overflow-x-auto` with `min-w-[640px]`.
+
+### Invoice detail page updates (`apps/web/src/app/admin/invoices/[id]/page.tsx`)
+
+- Wholesale badge in the header when `client_type='wholesaler'`.
+- Company displayed alongside personal name when both are set.
+- **Green "Mark paid" button** for `status='finalized' + client_type='wholesaler'` — prominent, distinct from the generic status-dropdown option (which is hidden for wholesalers to avoid double-action).
+- New `PaymentMethodsPanel` renders payment legs + amounts for every invoice including drafts (INV-010).
+- New `EmailInvoiceButton` — inline popover with address + "save to client" checkbox.
+- Notes render uses `whitespace-pre-wrap break-words`.
+- `ShipmentSection` has a carrier-aware service-level dropdown via `GET /admin/shipments/delivery-speeds`.
+
+### New pages
+
+- **`/admin/wholesale/reconciliation`** — table of every outstanding wholesale invoice, grouped by client, with per-invoice Mark Paid. Sidebar entry "Wholesale AR" added between "New invoice" and "Clients". (WH-001)
+- **KPI card on `/admin/kpi`** — "Total owed by all wholesalers" in a gold-accent card with top-5 breakdown and a deep link to the reconciliation page. Refreshes every 30s. (WH-003)
+
+### Client page updates
+
+- `ClientForm` gained: type toggle (retail/wholesale), `company` field, `secondary_emails` textarea (newline-separated). Name fields become optional when type=wholesale.
+- `/admin/clients/[id]` header renders company alongside name, shows Wholesale badge, lists secondary emails.
+- New **Appointments** block in the timeline — pulls from `GET /admin/clients/:id/appointments`.
+
+### Shipments tab
+
+- New "Service" column between Carrier and Tracking.
+- Inline editor's service-level dropdown populated from `/admin/shipments/delivery-speeds`, filtered to current carrier. Gracefully handles saved values no longer in the whitelist.
+- `overflow-x-auto` + `min-w-[780px]` for mobile (MOB-002).
+
+### Mobile horizontal scroll pass (MOB-002)
+
+Flipped `overflow-hidden rounded-xl …` → `overflow-x-auto rounded-xl …` (and added `min-w-[…]` to inner `<table>`) on: `/admin/invoices`, `/admin/clients`, `/admin/products`, `/admin/inventory`, `/admin/in-stock-sheet`, `/admin/buy-sheet`, `/admin/kpi`, `/admin/shipments`, and the wholesale reconciliation page's per-client blocks. Remaining wide tables (admin dashboard, categories, backups, calendar agenda) weren't touched this pass.
+
+### What's NOT in this release
+
+- **Phase 5 — PDF layout** (ticket PDF-001): phone-under-email, `MM-DD-YYYY` date format, payment rows, QR code to `/register`. Deferred. Nothing in `invoice-pdf.service.ts` changed.
+- **PROD-001** (Saint-Gaudens → Pre-1933): already handled by the existing regex in `apps/web/src/lib/product-category.ts:142` before this session — verified, no change needed.
+- **PROD-002 / PROD-003** (editable SKUs + locations): backend already supports SKU mutation (`ProductsService.update()`). "Location" semantics ambiguous — left for a follow-up with Hunter about what "every table and product location" means concretely.
+
+### Still pending after this commit
+
+1. **PDF changes** (Phase 5).
+2. **Prod migrations** — 020–023 need to be applied via Railway proxy once this commit is on `main`.
+3. **Fuzzy-match review tray** — current calendar auto-link only does exact email/secondary/phone-last-10. Admin "suggested matches" UX is a follow-up.
+4. **Remaining wide-table scroll wrappers** — categories, backups, admin dashboard, calendar agenda. Low-priority.
+5. **Webhook idempotency for calendar_bookings** — we use ON CONFLICT DO UPDATE so a replay upserts cleanly, but there's no webhook endpoint yet. Reuse this path if/when added.
+
+### Known risks / rollback
+
+| Risk | Mitigation | Rollback |
+|---|---|---|
+| `search_text` rebuild locks clients table briefly (~600 rows) | Fast enough to ignore; run off-hours if worried | `down()` restores the pre-020 expression |
+| `first_name`/`last_name` allowed NULL on retail | `clients_has_identity` CHECK requires ONE of first/last/company | Drop the CHECK; columns remain nullable (no data loss) |
+| Draft Save is DELETE+POST across two requests | POST-first, DELETE-after ordering → worst case is an orphan old draft admin can delete | n/a |
+| Calendar auto-client-create creates duplicates | Only exact email/secondary/phone match; fuzzy-similar names go to pending tray | `calendar_bookings.client_id` can always be nulled and re-matched |
+| Wholesale Mark Paid via existing status PATCH | paid_by_user_id stamped server-side automatically | Same state machine — safe |
+| Delivery-speed whitelist in TS, not DB CHECK | Service rejects bad pairs with readable 400 | Pre-migration rows have `delivery_speed=NULL` |
+| Email transport is SMTP via existing `EmailService` | Falls back to dev-JSON mode when `SMTP_HOST` unset | n/a |
+
+### Files added this session
+
+- `apps/api/src/db/migrations/020_client_company_and_emails.ts`
+- `apps/api/src/db/migrations/021_shipment_delivery_speed.ts`
+- `apps/api/src/db/migrations/022_wholesale_paid_audit.ts`
+- `apps/api/src/db/migrations/023_calendar_bookings.ts`
+- `apps/api/src/shipments/delivery-speeds.ts`
+- `apps/api/src/calendar/calendar-bookings.service.ts`
+- `apps/web/src/components/client-combobox.tsx`
+- `apps/web/src/app/admin/wholesale/reconciliation/page.tsx`
+
+### QA checklist — what a human should test before deploying
+
+- [ ] Migrations 020–023 apply cleanly to prod (`pnpm exec tsx apps/api/src/db/migrator.ts up`).
+- [ ] Existing retail clients still render correctly on `/admin/clients` (name shows; no "null null").
+- [ ] Create a wholesale client with only a company name → saves without error; invoice list shows the company.
+- [ ] Open `/admin/invoices/new` — type a product, see running total update; click "Total" in Step 4 → amount fills the last leg.
+- [ ] Save a draft, reload the page → draft loads via `?draftId=`, fields re-hydrate.
+- [ ] Email a draft to yourself — PDF arrives as attachment; invoice stays at `status='draft'`.
+- [ ] Print a draft — PDF opens in new tab; status unchanged.
+- [ ] Delete a draft — confirm dialog, redirects to drafts list.
+- [ ] Finalize a wholesale sell invoice → green "Mark paid" button appears → click it → status becomes paid, `paid_by_user_id` in audit_logs.
+- [ ] `/admin/wholesale/reconciliation` shows finalized wholesale invoices; disappears after Mark Paid.
+- [ ] `/admin/kpi` "Total owed by all wholesalers" matches reconciliation total.
+- [ ] Create a shipment — carrier dropdown drives service-level dropdown; invalid combos return a readable 400.
+- [ ] Book a public appointment on `/book` with an email that matches an existing client → client's timeline shows the appointment.
+- [ ] On mobile width, every table in the primary list pages scrolls horizontally instead of clipping.

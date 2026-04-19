@@ -176,8 +176,9 @@ function SheetSection({
   return (
     <section id={id} className="mt-8 scroll-mt-24">
       <h2 className="mb-2 text-base font-semibold text-sell-700">{label}</h2>
-      <div className="overflow-hidden rounded-xl border border-ink-200 bg-white">
-        <table className="w-full text-sm">
+      {/* MOB-002: horizontal scroll on narrow viewports. */}
+      <div className="overflow-x-auto rounded-xl border border-ink-200 bg-white">
+        <table className="w-full min-w-[720px] text-sm">
           <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
             <tr>
               <th className="px-4 py-3">Item</th>

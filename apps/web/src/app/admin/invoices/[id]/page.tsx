@@ -31,6 +31,9 @@ interface InvoiceDetail {
   client_id: string;
   client_name: string;
   client_email: string | null;
+  /** Wholesale vs retail — drives the "Mark paid" button + receivables view. */
+  client_type?: 'retail' | 'wholesaler';
+  client_company?: string | null;
   subtotal: string;
   tax: string;
   shipping: string;
@@ -45,6 +48,7 @@ interface InvoiceDetail {
   created_at: string;
   finalized_at: string | null;
   paid_at: string | null;
+  paid_by_user_id?: string | null;
   notes: string | null;
   line_items: LineItem[];
 }
@@ -140,25 +144,52 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </Link>
       </div>
 
-      <header className="flex items-start justify-between">
+      <header className="flex flex-col items-start justify-between gap-3 md:flex-row md:flex-wrap">
         <div>
-          <h1 className="font-mono text-2xl font-semibold">{data.invoice_number}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="font-mono text-2xl font-semibold">{data.invoice_number}</h1>
+            {data.client_type === 'wholesaler' && (
+              <span className="rounded-full bg-gold-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gold-600">
+                Wholesale
+              </span>
+            )}
+          </div>
           <p className="mt-1 text-sm text-ink-400">
             {data.type.toUpperCase()} · {data.client_name}
+            {data.client_company &&
+              !data.client_name.includes(data.client_company) && (
+                <span className="text-ink-500"> · {data.client_company}</span>
+              )}
             {data.client_email ? ` · ${data.client_email}` : ''}
           </p>
           <p className="mt-0.5 font-mono text-xs text-ink-400">
             {formatLocalDateTime(data.created_at)}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <StatusPill status={data.status} />
+          {/* Wholesale-specific Mark Paid button (WH-002). More prominent
+              than the generic "Mark paid" option in the status dropdown;
+              stamps paid_by_user_id automatically via the service. */}
+          {data.client_type === 'wholesaler' && data.status === 'finalized' && (
+            <button
+              onClick={() => setStatus('paid')}
+              className="rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700"
+              title="Record that this wholesaler has paid — removes from outstanding totals"
+            >
+              Mark paid
+            </button>
+          )}
           <button
             onClick={openPdf}
             className="rounded-md border border-ink-200 px-3 py-1.5 text-sm hover:bg-ink-50"
           >
             Download PDF
           </button>
+          <EmailInvoiceButton
+            invoiceId={data.id}
+            defaultTo={data.client_email ?? ''}
+          />
           {/* Void & recreate — surfaced on every status so an operator
               can correct a line item by opening a fresh copy. Cancels the
               current invoice (which reverses any inventory it caused) and
@@ -170,15 +201,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           >
             Void &amp; recreate
           </button>
-          {options.map((o) => (
-            <button
-              key={o.value}
-              onClick={() => setStatus(o.value)}
-              className="rounded-md bg-ink-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-ink-800"
-            >
-              {o.label}
-            </button>
-          ))}
+          {/* Hide the generic "Mark paid" from the status dropdown for
+              wholesalers — they use the dedicated green button above. */}
+          {options
+            .filter(
+              (o) =>
+                !(data.client_type === 'wholesaler' && o.value === 'paid'),
+            )
+            .map((o) => (
+              <button
+                key={o.value}
+                onClick={() => setStatus(o.value)}
+                className="rounded-md bg-ink-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-ink-800"
+              >
+                {o.label}
+              </button>
+            ))}
         </div>
       </header>
 
@@ -235,6 +273,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </section>
 
+      {/* Payment methods block — shown for every status including draft
+          (INV-010) so operators can verify the split is correct before
+          finalizing. Renders from payment_methods[] JSONB; falls back to
+          the legacy single payment_method column if the array is empty. */}
+      <PaymentMethodsPanel invoice={data} />
+
       <EditHeaderSection invoice={data} />
 
       <ShipmentSection invoiceId={data.id} invoiceStatus={data.status} />
@@ -254,14 +298,46 @@ function ShipmentSection({
   const { data: existing } = useQuery({
     queryKey: ['admin', 'shipments', 'for', invoiceId],
     queryFn: async () => {
-      const all = await apiFetch<Array<{ id: string; invoice_id: string; carrier: string; tracking_number: string | null; status: string; tracking_url: string | null }>>('/admin/shipments');
+      const all = await apiFetch<
+        Array<{
+          id: string;
+          invoice_id: string;
+          carrier: string;
+          tracking_number: string | null;
+          delivery_speed: string | null;
+          status: string;
+          tracking_url: string | null;
+        }>
+      >('/admin/shipments');
       return all.find((s) => s.invoice_id === invoiceId) ?? null;
     },
   });
+
+  // Delivery-speed whitelist (SHIP-001). Fetched once + cached forever —
+  // the list only changes when the API's delivery-speeds.ts does.
+  const { data: speeds } = useQuery({
+    queryKey: ['admin', 'shipments', 'delivery-speeds'],
+    queryFn: () =>
+      apiFetch<Record<'usps' | 'ups' | 'fedex' | 'other', string[]>>(
+        '/admin/shipments/delivery-speeds',
+      ),
+    staleTime: Infinity,
+  });
+
   const [carrier, setCarrier] = useState<'ups' | 'fedex' | 'usps' | 'other'>('ups');
   const [tracking, setTracking] = useState('');
+  const [deliverySpeed, setDeliverySpeed] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Reset speed when carrier changes — the prior value may no longer be
+  // valid for the new carrier's whitelist.
+  const carrierSpeeds = speeds?.[carrier] ?? [];
+  if (deliverySpeed && !carrierSpeeds.includes(deliverySpeed)) {
+    // Intentionally not a useEffect — safe to run inline on each render
+    // since setting to '' is idempotent once the guard above is satisfied.
+    setTimeout(() => setDeliverySpeed(''), 0);
+  }
 
   async function create() {
     setError(null);
@@ -273,6 +349,7 @@ function ShipmentSection({
           invoice_id: invoiceId,
           carrier,
           tracking_number: tracking || undefined,
+          delivery_speed: deliverySpeed || undefined,
         }),
       });
       await qc.invalidateQueries({ queryKey: ['admin', 'shipments'] });
@@ -289,8 +366,13 @@ function ShipmentSection({
       <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">Shipment</h2>
       {existing ? (
         <div className="mt-3 text-sm">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="uppercase font-medium">{existing.carrier}</span>
+            {existing.delivery_speed && (
+              <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-medium text-ink-700">
+                {existing.delivery_speed}
+              </span>
+            )}
             {existing.tracking_number ? (
               existing.tracking_url ? (
                 <a
@@ -312,7 +394,7 @@ function ShipmentSection({
             </span>
           </div>
           <p className="mt-3 text-xs text-ink-400">
-            Edit tracking + status on the{' '}
+            Edit tracking, speed + status on the{' '}
             <Link href="/admin/shipments" className="underline">
               shipments page
             </Link>
@@ -322,24 +404,41 @@ function ShipmentSection({
       ) : invoiceStatus === 'canceled' ? (
         <p className="mt-3 text-sm text-ink-400">Cannot ship a canceled invoice.</p>
       ) : (
-        <div className="mt-3 flex flex-col gap-3 md:flex-row">
+        <div className="mt-3 flex flex-col gap-2 md:flex-row md:flex-wrap">
           <select
             value={carrier}
             onChange={(e) =>
               setCarrier(e.target.value as 'ups' | 'fedex' | 'usps' | 'other')
             }
-            className="input md:w-32"
+            className="input md:w-28"
           >
             <option value="ups">UPS</option>
             <option value="fedex">FedEx</option>
             <option value="usps">USPS</option>
             <option value="other">Other</option>
           </select>
+          <select
+            value={deliverySpeed}
+            onChange={(e) => setDeliverySpeed(e.target.value)}
+            disabled={carrierSpeeds.length === 0}
+            className="input md:w-56"
+          >
+            <option value="">
+              {carrierSpeeds.length === 0
+                ? '— no service levels —'
+                : '— service level —'}
+            </option>
+            {carrierSpeeds.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
           <input
             value={tracking}
             onChange={(e) => setTracking(e.target.value)}
             placeholder="Tracking # (optional)"
-            className="input flex-1"
+            className="input flex-1 md:min-w-[200px]"
           />
           <button
             onClick={create}
@@ -364,6 +463,169 @@ function TotalRow({ label, value, bold }: { label: string; value: string; bold?:
       <span className="font-mono">
         ${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </span>
+    </div>
+  );
+}
+
+/**
+ * Payment methods + amounts (ticket INV-010). Source of truth is the
+ * JSONB `payment_methods` array written at create/update time; we also
+ * fall back to the legacy single-method column for rows that predate the
+ * array format. Draft invoices get the same treatment so operators can
+ * verify the split before finalizing.
+ */
+function PaymentMethodsPanel({ invoice }: { invoice: InvoiceDetail }) {
+  const legs = invoice.payment_methods ?? [];
+  if (legs.length === 0 && !invoice.payment_method) {
+    return (
+      <section className="mt-6 rounded-xl border border-ink-200 bg-white p-5">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+          Payment
+        </h2>
+        <p className="mt-2 text-sm text-ink-400">No payment recorded.</p>
+      </section>
+    );
+  }
+
+  const displayLegs =
+    legs.length > 0
+      ? legs
+      : // Synthetic single-leg row from the legacy column so the render
+        // stays uniform.
+        [
+          {
+            method: invoice.payment_method ?? '',
+            reference: null,
+            amount: invoice.total,
+          },
+        ];
+
+  return (
+    <section className="mt-6 rounded-xl border border-ink-200 bg-white p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+          Payment
+        </h2>
+        {invoice.paid_at && (
+          <span className="text-xs text-green-700">
+            Paid {new Date(invoice.paid_at).toLocaleDateString()}
+          </span>
+        )}
+      </div>
+      <ul className="mt-3 divide-y divide-ink-100">
+        {displayLegs.map((leg, i) => (
+          <li
+            key={i}
+            className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+          >
+            <span className="font-medium capitalize text-ink-800">
+              {leg.method || '(unspecified)'}
+            </span>
+            {leg.reference && (
+              <span className="truncate text-xs text-ink-500">{leg.reference}</span>
+            )}
+            <span className="ml-auto font-mono">
+              $
+              {Number(leg.amount).toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * Email this invoice as a PDF attachment. Opens a popover input
+ * prefilled with the client's primary email; clicking Send POSTs to
+ * /email. The address is optionally saved as a secondary on the client
+ * record so repeated emails to that accountant/partner remember it.
+ */
+function EmailInvoiceButton({
+  invoiceId,
+  defaultTo,
+}: {
+  invoiceId: string;
+  defaultTo: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [to, setTo] = useState(defaultTo);
+  const [save, setSave] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  async function send() {
+    setBusy(true);
+    setFlash(null);
+    try {
+      const res = await apiFetch<{ sent_to: string; saved_to_client: boolean }>(
+        `/admin/invoices/${invoiceId}/email`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ to: to.trim().toLowerCase(), save_to_client: save }),
+        },
+      );
+      setFlash(
+        res.saved_to_client
+          ? `Sent · saved to client record`
+          : `Sent to ${res.sent_to}`,
+      );
+      setTimeout(() => setOpen(false), 1200);
+    } catch (err) {
+      setFlash(err instanceof ApiError ? err.message : 'Send failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="rounded-md border border-ink-200 px-3 py-1.5 text-sm hover:bg-ink-50"
+        title="Email this invoice as a PDF attachment"
+      >
+        Email
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-md border border-ink-200 bg-white p-2 shadow-sm">
+      <input
+        type="email"
+        value={to}
+        onChange={(e) => setTo(e.target.value)}
+        placeholder="recipient@example.com"
+        className="input w-56"
+        autoFocus
+      />
+      <label className="flex items-center gap-1 text-[11px] text-ink-500">
+        <input
+          type="checkbox"
+          checked={save}
+          onChange={(e) => setSave(e.target.checked)}
+        />
+        save
+      </label>
+      <button
+        onClick={send}
+        disabled={busy || !to}
+        className="rounded-md bg-ink-900 px-3 py-1 text-sm font-medium text-white hover:bg-ink-800 disabled:opacity-60"
+      >
+        {busy ? 'Sending…' : 'Send'}
+      </button>
+      <button
+        onClick={() => setOpen(false)}
+        className="rounded-md px-2 py-1 text-xs text-ink-500 hover:bg-ink-50"
+      >
+        Cancel
+      </button>
+      {flash && (
+        <span className="w-full text-[11px] text-ink-600">{flash}</span>
+      )}
     </div>
   );
 }
@@ -469,7 +731,11 @@ function EditHeaderSection({ invoice }: { invoice: InvoiceDetail }) {
                 Edit →
               </button>
             </div>
-            <p className="mt-2 text-sm text-ink-800">{invoice.notes}</p>
+            {/* INV-009: preserve line breaks + wrap long tokens so notes
+                can't overflow the card container. */}
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm text-ink-800">
+              {invoice.notes}
+            </p>
           </div>
         )}
         {!invoice.notes && (

@@ -3,6 +3,7 @@ import { Inject } from '@nestjs/common';
 import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
 import { Roles } from '../common/decorators/roles.decorator';
+import { InvoicesService } from '../invoices/invoices.service';
 import type { DB } from '../db/types';
 
 type Period = 'day' | 'week' | 'month' | 'quarter' | 'year';
@@ -35,7 +36,29 @@ const ALLOWED_PERIODS: Record<Period, string> = {
 @Controller('admin/kpi')
 @Roles('admin', 'staff')
 export class KpiController {
-  constructor(@Inject(KYSELY) private readonly db: Kysely<DB>) {}
+  constructor(
+    @Inject(KYSELY) private readonly db: Kysely<DB>,
+    private readonly invoices: InvoicesService,
+  ) {}
+
+  /**
+   * Wholesale-owed KPI (ticket WH-003).
+   *
+   * Shape:
+   *   {
+   *     total_owed: "12345.67",
+   *     by_client: [{ client_id, client_name, client_email, invoice_count, owed, invoices: [...] }, ...]
+   *   }
+   *
+   * Delegates to `InvoicesService.listOutstandingWholesale()` so the KPI
+   * card and the /admin/wholesale/reconciliation page share one source of
+   * truth. The total is the sum across all rows; the per-client list is
+   * what the supporting drill-down table renders.
+   */
+  @Get('wholesale-owed')
+  wholesaleOwed() {
+    return this.invoices.listOutstandingWholesale();
+  }
 
   @Get()
   async rollup(

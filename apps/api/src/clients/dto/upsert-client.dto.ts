@@ -1,24 +1,44 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsIn,
   IsOptional,
   IsString,
   MaxLength,
-  MinLength,
 } from 'class-validator';
 import type { ClientType } from '../../db/types';
 
 export class CreateClientDto {
+  // first_name + last_name are optional (migration 020). Either a personal
+  // name OR a company must be present — enforced by the `clients_has_identity`
+  // CHECK constraint on the DB side and mirrored in the service.
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(80)
-  first_name!: string;
+  first_name?: string;
 
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(80)
-  last_name!: string;
+  last_name?: string;
+
+  /** Company/organization name. Primary identity for wholesale records. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  company?: string;
+
+  /**
+   * Extra email addresses on file (e.g. accountant, partner). Stored as a
+   * JSONB array; the primary is still `email`.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsEmail({}, { each: true })
+  secondary_emails?: string[];
 
   @IsOptional()
   @IsEmail()
@@ -82,15 +102,24 @@ export class CreateClientDto {
 export class UpdateClientDto {
   @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(80)
   first_name?: string;
 
   @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(80)
   last_name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  company?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsEmail({}, { each: true })
+  secondary_emails?: string[];
 
   @IsOptional()
   @IsEmail()

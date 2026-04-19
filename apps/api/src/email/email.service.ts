@@ -3,11 +3,21 @@ import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 export interface SendMailInput {
   to: string;
   subject: string;
   text: string;
   html?: string;
+  /** Optional file attachments. Used by the "email invoice" flow to attach the PDF. */
+  attachments?: MailAttachment[];
+  /** Optional reply-to override — defaults to the configured SMTP_FROM. */
+  replyTo?: string;
 }
 
 /**
@@ -67,10 +77,20 @@ export class EmailService implements OnModuleInit {
         subject: input.subject,
         text: input.text,
         html: input.html,
+        replyTo: input.replyTo,
+        attachments: input.attachments?.map((a) => ({
+          filename: a.filename,
+          content: a.content,
+          contentType: a.contentType,
+        })),
       });
       if (this.mode === 'dev') {
         // In dev, log just enough to see it worked without dumping the whole payload.
-        this.logger.log(`[dev email] → ${input.to} · ${input.subject}`);
+        this.logger.log(
+          `[dev email] → ${input.to} · ${input.subject}${
+            input.attachments?.length ? ` · ${input.attachments.length} attachment(s)` : ''
+          }`,
+        );
       } else {
         this.logger.log(`sent → ${input.to} · ${input.subject} · id=${info.messageId}`);
       }

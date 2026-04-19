@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api-client';
 
@@ -107,6 +108,11 @@ export default function KpiPage() {
         ))}
       </section>
 
+      {/* Wholesale receivables KPI (WH-003). Independent of the period
+          selector — it's a real-time snapshot of outstanding AR, not a
+          historical rollup. Drills down to /admin/wholesale/reconciliation. */}
+      <WholesaleOwedCard />
+
       <section className="mt-6 rounded-xl border border-ink-200 bg-white p-5">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">Timeline</h2>
@@ -124,8 +130,9 @@ export default function KpiPage() {
         </div>
       </section>
 
-      <section className="mt-4 overflow-hidden rounded-xl border border-ink-200 bg-white">
-        <table className="w-full text-sm">
+      {/* MOB-002: rollup table scrolls horizontally on narrow screens. */}
+      <section className="mt-4 overflow-x-auto rounded-xl border border-ink-200 bg-white">
+        <table className="w-full min-w-[680px] text-sm">
           <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
             <tr>
               <th className="px-4 py-3">Bucket</th>
@@ -164,6 +171,87 @@ export default function KpiPage() {
         </table>
       </section>
     </div>
+  );
+}
+
+/**
+ * Real-time wholesale AR card (WH-003). Shows:
+ *   1. Grand total owed by all wholesalers
+ *   2. Top 5 wholesalers by outstanding balance
+ *   3. Link to the full reconciliation page
+ *
+ * Refreshes every 30s so "Mark paid" on the reconciliation page is
+ * reflected here within a half-minute without a manual refresh.
+ */
+function WholesaleOwedCard() {
+  const { data, isLoading } = useQuery<{
+    total_owed: string;
+    by_client: Array<{
+      client_id: string;
+      client_name: string;
+      client_email: string | null;
+      invoice_count: number;
+      owed: string;
+    }>;
+  }>({
+    queryKey: ['admin', 'kpi', 'wholesale-owed'],
+    queryFn: () =>
+      apiFetch('/admin/kpi/wholesale-owed'),
+    refetchInterval: 30_000,
+  });
+
+  const top = (data?.by_client ?? [])
+    .slice()
+    .sort((a, b) => Number(b.owed) - Number(a.owed))
+    .slice(0, 5);
+
+  return (
+    <section className="mt-4 rounded-xl border border-gold-500/40 bg-gold-500/5 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-gold-700">
+            Total owed by all wholesalers
+          </h2>
+          <div className="mt-1 font-mono text-3xl font-semibold text-ink-900">
+            {isLoading ? '…' : `$${money(Number(data?.total_owed ?? 0))}`}
+          </div>
+          <div className="mt-0.5 text-xs text-ink-500">
+            {data?.by_client.length ?? 0} wholesaler
+            {(data?.by_client.length ?? 0) === 1 ? '' : 's'} with open balances
+          </div>
+        </div>
+        <Link
+          href="/admin/wholesale/reconciliation"
+          className="rounded-md bg-ink-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-ink-800"
+        >
+          Open reconciliation →
+        </Link>
+      </div>
+
+      {top.length > 0 && (
+        <ul className="mt-4 divide-y divide-gold-500/20">
+          {top.map((c) => (
+            <li
+              key={c.client_id}
+              className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+            >
+              <Link
+                href={`/admin/clients/${c.client_id}`}
+                className="font-medium hover:underline"
+              >
+                {c.client_name}
+              </Link>
+              <span className="text-xs text-ink-500">
+                {c.invoice_count} invoice{c.invoice_count === 1 ? '' : 's'}
+              </span>
+              <span className="ml-auto font-mono text-ink-900">
+                ${money(Number(c.owed))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -119,9 +119,16 @@ export interface ClientsTable {
   id: Generated<string>;
   // Optional link: a client can exist without a login (walk-in).
   user_id: string | null;
-  first_name: string;
-  last_name: string;
+  // Nullable as of migration 020: wholesale-company records may lack a
+  // personal name. CHECK constraint `clients_has_identity` still requires
+  // *one* of first_name / last_name / company to be non-empty.
+  first_name: string | null;
+  last_name: string | null;
+  /** Company/organization name (migration 020). Primary identity for wholesale. */
+  company: string | null;
   email: string | null;
+  /** Additional email addresses on file (migration 020). */
+  secondary_emails: ColumnType<string[], string[] | undefined, string[]>;
   phone: string | null;
   address_line1: string | null;
   address_line2: string | null;
@@ -136,7 +143,8 @@ export interface ClientsTable {
   client_type: ColumnType<ClientType, ClientType | undefined, ClientType>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
-  // Postgres GENERATED column (migration 006) — read-only from the app side.
+  // Postgres GENERATED column (migration 006, rebuilt in 020 to include
+  // company). Read-only from the app side.
   search_text: ColumnType<string, never, never>;
 }
 
@@ -282,6 +290,8 @@ export interface InvoicesTable {
   updated_at: Generated<Timestamp>;
   finalized_at: Timestamp | null;
   paid_at: Timestamp | null;
+  /** User who marked the invoice paid (migration 022). Wholesale audit. */
+  paid_by_user_id: string | null;
 }
 
 export type Invoice = Selectable<InvoicesTable>;
@@ -339,7 +349,36 @@ export interface DB {
   messages: MessagesTable;
   integrations: IntegrationsTable;
   shipment_tracking_events: ShipmentTrackingEventsTable;
+  calendar_bookings: CalendarBookingsTable;
 }
+
+// ===== Calendar bookings (migration 023) =====
+
+export type CalendarBookingStatus = 'confirmed' | 'canceled' | 'completed';
+export type CalendarBookingSource = 'public_booking' | 'admin_created' | 'google_import';
+
+export interface CalendarBookingsTable {
+  id: Generated<string>;
+  /** Google Calendar event id. Unique — dedupes webhook / import re-ingest. */
+  google_event_id: string;
+  /** Link to the CRM client record. NULL = unmatched / awaiting review. */
+  client_id: string | null;
+  service: string | null;
+  starts_at: Timestamp;
+  ends_at: Timestamp;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  notes: string | null;
+  status: ColumnType<CalendarBookingStatus, CalendarBookingStatus | undefined, CalendarBookingStatus>;
+  source: ColumnType<CalendarBookingSource, CalendarBookingSource | undefined, CalendarBookingSource>;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+
+export type CalendarBooking = Selectable<CalendarBookingsTable>;
+export type NewCalendarBooking = Insertable<CalendarBookingsTable>;
+export type CalendarBookingUpdate = Updateable<CalendarBookingsTable>;
 
 export type TrackingEventSource = 'webhook' | 'poll' | 'manual';
 
@@ -431,6 +470,12 @@ export interface ShipmentsTable {
   carrier: ShipmentCarrier;
   tracking_number: string | null;
   status: ColumnType<ShipmentStatus, ShipmentStatus | undefined, ShipmentStatus>;
+  /**
+   * Carrier-specific service level (migration 021). Free-form TEXT, but
+   * validated against a carrier↔speed whitelist in the shipments service.
+   * NULL for legacy rows created before the column existed.
+   */
+  delivery_speed: string | null;
   shipped_at: Timestamp | null;
   delivered_at: Timestamp | null;
   weight_lbs: Numeric | null;

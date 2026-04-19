@@ -9,9 +9,13 @@ import { StatusPill } from '@/components/status-pill';
 
 interface Client {
   id: string;
-  first_name: string;
-  last_name: string;
+  first_name: string | null;
+  last_name: string | null;
+  /** Organization name (migration 020). Primary identity for wholesale. */
+  company: string | null;
   email: string | null;
+  /** Additional emails on file (migration 020). */
+  secondary_emails: string[] | null;
   phone: string | null;
   address_line1: string | null;
   address_line2: string | null;
@@ -23,7 +27,22 @@ interface Client {
   user_id: string | null;
   notes: string | null;
   heard_from: string | null;
+  client_type: 'retail' | 'wholesaler';
   created_at: string;
+}
+
+interface AppointmentBooking {
+  id: string;
+  google_event_id: string;
+  service: string | null;
+  starts_at: string;
+  ends_at: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  notes: string | null;
+  status: string;
+  source: string;
 }
 
 interface Timeline {
@@ -81,6 +100,12 @@ export default function ClientDetailPage({
   const { data: timeline } = useQuery({
     queryKey: ['admin', 'client', id, 'timeline'],
     queryFn: () => apiFetch<Timeline>(`/admin/clients/${id}/timeline`),
+  });
+  // Calendar bookings linked to this client (CAL-001).
+  const { data: appointments } = useQuery({
+    queryKey: ['admin', 'client', id, 'appointments'],
+    queryFn: () =>
+      apiFetch<AppointmentBooking[]>(`/admin/clients/${id}/appointments`),
   });
 
   const [portalResult, setPortalResult] = useState<string | null>(null);
@@ -151,15 +176,34 @@ export default function ClientDetailPage({
         </Link>
       </div>
 
-      <header className="flex items-start justify-between">
+      <header className="flex flex-col items-start justify-between gap-3 md:flex-row">
         <div>
-          <h1 className="text-2xl font-semibold">
-            {client.first_name} {client.last_name}
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-semibold">
+              {[client.first_name, client.last_name].filter(Boolean).join(' ') ||
+                client.company ||
+                '(unnamed)'}
+            </h1>
+            {client.client_type === 'wholesaler' && (
+              <span className="rounded-full bg-gold-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gold-600">
+                Wholesale
+              </span>
+            )}
+          </div>
+          {client.company &&
+            (client.first_name || client.last_name) && (
+              <p className="mt-0.5 text-sm text-ink-600">{client.company}</p>
+            )}
           <p className="mt-1 text-sm text-ink-400">
             {client.email ?? 'no email'}
             {client.phone ? ` · ${client.phone}` : ''}
           </p>
+          {client.secondary_emails && client.secondary_emails.length > 0 && (
+            <p className="mt-0.5 text-xs text-ink-500">
+              Also:{' '}
+              {client.secondary_emails.join(', ')}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -365,9 +409,55 @@ export default function ClientDetailPage({
             </div>
           ))}
         </TimelineBlock>
+
+        {/* Appointments (CAL-001). Pulled from the `calendar_bookings`
+            mirror — the booking submitted to /book (or admin-linked from
+            the pending tray) appears here regardless of whether it later
+            produced an invoice. */}
+        <TimelineBlock
+          title="Appointments"
+          empty="No appointments linked"
+          count={appointments?.length}
+        >
+          {(appointments ?? []).map((a) => (
+            <div key={a.id} className="py-2 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">
+                  {a.service ?? '(untitled)'}
+                </span>
+                <span className="text-xs text-ink-400">
+                  {formatLocalDateTime(a.starts_at)}
+                </span>
+              </div>
+              {a.notes && (
+                <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-ink-500">
+                  {a.notes}
+                </div>
+              )}
+              <div className="mt-0.5 flex items-center gap-2 text-[11px] uppercase text-ink-400">
+                <span>{a.status}</span>
+                <span>·</span>
+                <span>{a.source.replace('_', ' ')}</span>
+              </div>
+            </div>
+          ))}
+        </TimelineBlock>
       </section>
     </div>
   );
+}
+
+function formatLocalDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(d);
 }
 
 function TimelineBlock({

@@ -6,7 +6,11 @@ import { apiFetch, ApiError } from '@/lib/api-client';
 export interface ClientFormValues {
   first_name: string;
   last_name: string;
+  /** Organization name (migration 020). Primary identity for wholesale. */
+  company: string;
   email: string;
+  /** Additional email addresses — newline-separated in the textarea. */
+  secondary_emails: string;
   phone: string;
   address_line1: string;
   address_line2: string;
@@ -16,6 +20,8 @@ export interface ClientFormValues {
   country: string;
   notes: string;
   heard_from: string;
+  /** Retail (default) vs wholesaler. Drives the name-or-company requirement. */
+  client_type: 'retail' | 'wholesaler';
   is_portal_enabled?: boolean;
 }
 
@@ -65,30 +71,92 @@ export function ClientForm({
     }
   }
 
+  // Retail/wholesale drives the name requirement: retail must have a
+  // personal name; wholesale can identify by company alone. The backend
+  // CHECK constraint `clients_has_identity` enforces this server-side too.
+  const isWholesale = f.client_type === 'wholesaler';
+  const nameRequired = !isWholesale;
+
   return (
     <form onSubmit={submit} className="space-y-4 rounded-xl border border-ink-200 bg-white p-6">
-      <div className="grid grid-cols-2 gap-3">
-        <L label="First name">
+      {/* Client type toggle (CLIENT-001). Wholesale records can skip the
+          personal name entirely — the company field becomes primary ID. */}
+      <div>
+        <span className="text-xs font-medium uppercase tracking-wide text-ink-400">
+          Client type
+        </span>
+        <div className="mt-1 inline-flex rounded-md border border-ink-200 bg-ink-50 p-1">
+          <button
+            type="button"
+            onClick={() => set('client_type', 'retail')}
+            className={`rounded px-3 py-1 text-sm ${
+              !isWholesale ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-600'
+            }`}
+          >
+            Retail / individual
+          </button>
+          <button
+            type="button"
+            onClick={() => set('client_type', 'wholesaler')}
+            className={`rounded px-3 py-1 text-sm ${
+              isWholesale ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-600'
+            }`}
+          >
+            Wholesale / company
+          </button>
+        </div>
+      </div>
+
+      {isWholesale && (
+        <L label="Company name *">
           <input
             required
+            value={f.company}
+            onChange={(e) => set('company', e.target.value)}
+            className="input"
+            maxLength={200}
+            placeholder="Acme Coin Co."
+          />
+        </L>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <L label={`First name${nameRequired ? ' *' : ''}`}>
+          <input
+            required={nameRequired}
             value={f.first_name}
             onChange={(e) => set('first_name', e.target.value)}
             className="input"
             maxLength={80}
+            placeholder={isWholesale ? 'Primary contact (optional)' : ''}
           />
         </L>
-        <L label="Last name">
+        <L label={`Last name${nameRequired ? ' *' : ''}`}>
           <input
-            required
+            required={nameRequired}
             value={f.last_name}
             onChange={(e) => set('last_name', e.target.value)}
             className="input"
             maxLength={80}
+            placeholder={isWholesale ? 'Primary contact (optional)' : ''}
           />
         </L>
       </div>
+
+      {!isWholesale && (
+        <L label="Company (optional)">
+          <input
+            value={f.company}
+            onChange={(e) => set('company', e.target.value)}
+            className="input"
+            maxLength={200}
+            placeholder="If the client is also a business"
+          />
+        </L>
+      )}
+
       <div className="grid grid-cols-2 gap-3">
-        <L label="Email">
+        <L label="Email (primary)">
           <input
             type="email"
             value={f.email}
@@ -106,6 +174,16 @@ export function ClientForm({
           />
         </L>
       </div>
+
+      <L label="Additional emails (one per line)">
+        <textarea
+          value={f.secondary_emails}
+          onChange={(e) => set('secondary_emails', e.target.value)}
+          className="input whitespace-pre-wrap"
+          rows={2}
+          placeholder="accountant@example.com&#10;partner@example.com"
+        />
+      </L>
       <L label="Address line 1">
         <input
           value={f.address_line1}
@@ -219,10 +297,16 @@ function L({ label, children }: { label: string; children: React.ReactNode }) {
 }
 
 export function toDto(v: ClientFormValues) {
+  const secondary = v.secondary_emails
+    .split(/[\r\n,]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
   return {
-    first_name: v.first_name.trim(),
-    last_name: v.last_name.trim(),
+    first_name: v.first_name.trim() || undefined,
+    last_name: v.last_name.trim() || undefined,
+    company: v.company.trim() || undefined,
     email: v.email.trim() || undefined,
+    secondary_emails: secondary.length > 0 ? secondary : undefined,
     phone: v.phone.trim() || undefined,
     address_line1: v.address_line1.trim() || undefined,
     address_line2: v.address_line2.trim() || undefined,
@@ -232,14 +316,29 @@ export function toDto(v: ClientFormValues) {
     country: v.country.trim() || undefined,
     notes: v.notes.trim() || undefined,
     heard_from: v.heard_from.trim() || undefined,
+    client_type: v.client_type,
   };
 }
 
-export function fromClient(c: Partial<ClientFormValues>): ClientFormValues {
+/**
+ * Hydrate a ClientFormValues from a server response. Accepts the subset
+ * of fields we show in the form so both create-from-scratch and
+ * edit-existing use the same shape.
+ */
+export function fromClient(
+  c: Partial<ClientFormValues> & { secondary_emails?: string | string[] | null },
+): ClientFormValues {
+  const secondary = Array.isArray(c.secondary_emails)
+    ? c.secondary_emails.join('\n')
+    : typeof c.secondary_emails === 'string'
+      ? c.secondary_emails
+      : '';
   return {
     first_name: c.first_name ?? '',
     last_name: c.last_name ?? '',
+    company: c.company ?? '',
     email: c.email ?? '',
+    secondary_emails: secondary,
     phone: c.phone ?? '',
     address_line1: c.address_line1 ?? '',
     address_line2: c.address_line2 ?? '',
@@ -249,5 +348,6 @@ export function fromClient(c: Partial<ClientFormValues>): ClientFormValues {
     country: c.country ?? '',
     notes: c.notes ?? '',
     heard_from: c.heard_from ?? '',
+    client_type: c.client_type ?? 'retail',
   };
 }

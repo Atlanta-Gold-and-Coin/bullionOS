@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -10,6 +11,7 @@ import {
   Query,
   Res,
 } from '@nestjs/common';
+import { IsBoolean, IsEmail, IsOptional } from 'class-validator';
 import type { Response } from 'express';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, type RequestUser } from '../common/decorators/current-user.decorator';
@@ -87,4 +89,56 @@ export class AdminInvoicesController {
     const stream = await this.pdf.render(invoice);
     stream.pipe(res);
   }
+
+  /**
+   * Hard-delete a draft invoice. Guarded in the service to `status='draft'`
+   * only — the detail page's Cancel flow stays authoritative for anything
+   * already finalized. Returns the invoice_number for a toast. (INV-005)
+   */
+  @Delete(':id')
+  @HttpCode(200)
+  deleteDraft(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.invoices.deleteDraft(id, { id: user.id, role: user.role });
+  }
+
+  /**
+   * Email the invoice PDF to a recipient. Optionally persist the address
+   * on the client's `secondary_emails` list when it's not already the
+   * primary. Never mutates invoice state — safe for drafts. (INV-007)
+   */
+  @Post(':id/email')
+  @HttpCode(200)
+  email(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: EmailInvoiceDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.invoices.emailInvoice(
+      id,
+      { to: dto.to, saveToClient: dto.save_to_client ?? false },
+      { id: user.id, role: user.role },
+    );
+  }
+
+  // Note: outstanding wholesale receivables live on the KPI controller
+  // (`GET /admin/kpi/wholesale-owed`) rather than here. Keeping a second
+  // copy on this controller would collide with `GET :id` (which uses
+  // ParseUUIDPipe) at the routing layer since the slug `wholesale` is
+  // not a UUID and Nest matches in declaration order.
+}
+
+class EmailInvoiceDto {
+  @IsEmail()
+  to!: string;
+
+  /**
+   * If true and `to` is not already the client's primary email, append it
+   * to their `secondary_emails` array. (INV-007 req.)
+   */
+  @IsOptional()
+  @IsBoolean()
+  save_to_client?: boolean;
 }

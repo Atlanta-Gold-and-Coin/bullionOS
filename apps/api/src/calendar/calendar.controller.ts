@@ -6,6 +6,8 @@ import {
   Get,
   HttpCode,
   Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -22,8 +24,10 @@ import {
   IsISO8601,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import type { Request } from 'express';
@@ -33,6 +37,7 @@ import { CurrentUser, type RequestUser } from '../common/decorators/current-user
 import { IntegrationsService } from '../integrations/integrations.service';
 import type { CredentialsFor } from '../integrations/integrations.registry';
 import { CalendarService } from './calendar.service';
+import { CalendarBookingsService } from './calendar-bookings.service';
 
 class EventAttendeeDto {
   @IsEmail()
@@ -78,6 +83,14 @@ class CreateAdminEventDto {
   @IsOptional()
   @IsIn(['all', 'externalOnly', 'none'])
   sendUpdates?: 'all' | 'externalOnly' | 'none';
+}
+
+class LinkBookingDto {
+  // null means "detach from any client". Anything else must be a UUID.
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsUUID()
+  client_id?: string | null;
 }
 
 class CreateBookingDto {
@@ -139,6 +152,7 @@ export class CalendarController {
 
   constructor(
     private readonly calendar: CalendarService,
+    private readonly bookings: CalendarBookingsService,
     private readonly integrations: IntegrationsService,
   ) {}
 
@@ -179,16 +193,84 @@ export class CalendarController {
     // containing "appraisal" — case-insensitive match so "Appraisal",
     // "Appraisal Only", and "Appraisal with Intent to Sell" all qualify.
     const isAppraisal = /appraisal/i.test(normalized);
+    const durationMinutes = isAppraisal ? 60 : cfg.slotMinutes;
+    const name = dto.name.trim();
+    const email = dto.email.trim().toLowerCase();
+    const phone = dto.phone?.trim();
+    const notes = dto.notes?.trim();
+
     const r = await this.calendar.createBooking({
       serviceLabel: normalized,
       startIso: dto.start,
-      name: dto.name.trim(),
-      email: dto.email.trim().toLowerCase(),
-      phone: dto.phone?.trim(),
-      notes: dto.notes?.trim(),
+      name,
+      email,
+      phone,
+      notes,
       durationMinutes: isAppraisal ? 60 : undefined,
     });
+
+    // Mirror into calendar_bookings + attempt to link/create a CRM client
+    // (ticket CAL-001). Never fail the booking response if mirroring
+    // fails — the Google event is authoritative; admin can reconcile
+    // via /admin/calendar/bookings/pending.
+    const startsAt = new Date(dto.start);
+    const endsAt = new Date(startsAt.getTime() + durationMinutes * 60 * 1000);
+    try {
+      await this.bookings.recordPublicBooking({
+        googleEventId: r.eventId,
+        service: normalized,
+        startsAt,
+        endsAt,
+        name,
+        email,
+        phone: phone ?? null,
+        notes: notes ?? null,
+      });
+    } catch (err) {
+      // Intentional swallow — mirror failure doesn't invalidate the booking.
+      // Tracked in service-level logger.
+      void err;
+    }
+
     return { ok: true, eventId: r.eventId, htmlLink: r.htmlLink };
+  }
+
+  // ---------- Admin booking mirror ----------
+
+  /**
+   * Bookings for a single client (appointment history).
+   * Reads from the local `calendar_bookings` mirror, not Google. (CAL-001)
+   */
+  @Get('admin/clients/:id/appointments')
+  @Roles('admin', 'staff')
+  adminListAppointmentsForClient(
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.bookings.listForClient(id);
+  }
+
+  /**
+   * Bookings that couldn't be auto-linked to a client — admin reconciles
+   * these manually. Surfaced on /admin/calendar in a "Needs review" tray.
+   */
+  @Get('admin/calendar/bookings/pending')
+  @Roles('admin', 'staff')
+  adminListPendingBookings() {
+    return this.bookings.listPending();
+  }
+
+  /**
+   * Manually attach a booking to a client (or detach when clientId is
+   * null). Used from the Pending Bookings review screen.
+   */
+  @Patch('admin/calendar/bookings/:id/client')
+  @Roles('admin', 'staff')
+  adminLinkBookingClient(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: LinkBookingDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.bookings.linkToClient(id, dto.client_id ?? null, user.id);
   }
 
   // ---------- Admin event CRUD ----------

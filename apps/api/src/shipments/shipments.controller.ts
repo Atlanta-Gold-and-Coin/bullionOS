@@ -12,11 +12,26 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CreateShipmentDto } from './dto/create-shipment.dto';
 import { UpdateShipmentDto } from './dto/update-shipment.dto';
 import { ShipmentsService, trackingUrlFor } from './shipments.service';
+import { DELIVERY_SPEEDS } from './delivery-speeds';
 
 @Controller('admin/shipments')
 @Roles('admin', 'staff')
 export class AdminShipmentsController {
   constructor(private readonly service: ShipmentsService) {}
+
+  /**
+   * Expose the carrier→delivery-speed whitelist so the web UI can build
+   * the dropdown without hardcoding it. Returned as the flat object —
+   * keys are carriers ('ups' | 'fedex' | 'usps' | 'other'), values are
+   * ordered arrays of human-readable service names. (SHIP-001)
+   *
+   * Declared BEFORE the `:id` route so Nest's matcher picks this up
+   * instead of trying to parse "delivery-speeds" as a UUID.
+   */
+  @Get('delivery-speeds')
+  getDeliverySpeeds() {
+    return DELIVERY_SPEEDS;
+  }
 
   @Get()
   async list() {
