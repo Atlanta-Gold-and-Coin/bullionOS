@@ -42,11 +42,17 @@ export class InventoryController {
     return this.service.setLocation(productId, dto.location, user.id);
   }
 
-  /** Client-portal view (requires auth, role=client). */
+  /**
+   * Client-portal view (requires auth, role=client).
+   *
+   * Shows every in-stock item regardless of the `show_on_website`
+   * toggle — that toggle is for the anonymous WP plugin audience.
+   * Logged-in clients are entitled to see the full in-stock inventory.
+   */
   @Get('client/in-stock')
   @Roles('client')
   clientInStock() {
-    return this.service.inStock();
+    return this.service.inStock({ onlyWebsite: false });
   }
 
   /**
@@ -65,6 +71,6 @@ export class InventoryController {
   @Header('Cache-Control', 'no-store, no-cache, must-revalidate')
   @Header('Pragma', 'no-cache')
   publicInStock() {
-    return this.service.inStock();
+    return this.service.inStock({ onlyWebsite: true });
   }
 }

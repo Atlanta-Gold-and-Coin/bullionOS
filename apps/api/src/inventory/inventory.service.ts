@@ -55,8 +55,25 @@ export class InventoryService {
       .execute() as unknown as Promise<InventoryRow[]>;
   }
 
-  /** Public-shop view: items with positive available stock + flagged for web. */
-  inStock(): Promise<
+  /**
+   * In-stock feed. Two audiences:
+   *
+   *   - Public (WP plugin, atlantagoldandcoin.com)
+   *     → opts.onlyWebsite=true: obeys `show_on_website` so the shop can
+   *       hide items from the public site without deactivating them.
+   *
+   *   - Client portal (logged-in retail/wholesale clients)
+   *     → opts.onlyWebsite=false: the client is already authenticated and
+   *       expects to see everything we have in stock; `show_on_website`
+   *       is a display-only toggle for the WP plugin and shouldn't gate
+   *       the portal. Prior to this split, the filter was always on,
+   *       which made the client portal look empty when no items were
+   *       flagged for the public site.
+   *
+   * Always filters on `is_active=true` and `available > 0` regardless
+   * of audience.
+   */
+  inStock(opts: { onlyWebsite?: boolean } = {}): Promise<
     Array<
       Pick<
         InventoryRow,
@@ -64,7 +81,8 @@ export class InventoryService {
       > & { weight_troy_oz: string }
     >
   > {
-    return this.db
+    const onlyWebsite = opts.onlyWebsite === true;
+    let q = this.db
       .selectFrom('products as p')
       .innerJoin('inventory as inv', 'inv.product_id', 'p.id')
       .select([
@@ -77,10 +95,10 @@ export class InventoryService {
         sql<number>`(inv.quantity_on_hand - inv.quantity_reserved)`.as('available'),
       ])
       .where('p.is_active', '=', true)
-      .where('p.show_on_website', '=', true)
       .where(sql<boolean>`(inv.quantity_on_hand - inv.quantity_reserved) > 0`)
-      .orderBy('p.name')
-      .execute() as never;
+      .orderBy('p.name');
+    if (onlyWebsite) q = q.where('p.show_on_website', '=', true);
+    return q.execute() as never;
   }
 
   // ─── Primitives ─────────────────────────────────────────────────────────
