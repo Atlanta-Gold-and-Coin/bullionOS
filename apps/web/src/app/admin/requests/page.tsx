@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError, getAccessToken } from '@/lib/api-client';
 import { MessageThread } from '@/components/message-thread';
@@ -27,7 +28,17 @@ interface AdminDealRequest {
 const TABS = ['pending', 'accepted', 'rejected', 'all'] as const;
 
 export default function AdminRequestsPage() {
-  const [tab, setTab] = useState<(typeof TABS)[number]>('pending');
+  const searchParams = useSearchParams();
+  // Deep-link support: `/admin/requests/[id]` redirects here with
+  //   ?status=<status>#req-<id>
+  // so we open the right tab and can scroll/highlight the target card.
+  // Fall back to 'pending' for fresh nav.
+  const initialStatus = (searchParams.get('status') as (typeof TABS)[number] | null) ?? 'pending';
+  const [tab, setTab] = useState<(typeof TABS)[number]>(
+    TABS.includes(initialStatus as (typeof TABS)[number])
+      ? (initialStatus as (typeof TABS)[number])
+      : 'pending',
+  );
   const { data } = useQuery({
     queryKey: ['admin', 'deal-requests', tab],
     queryFn: () =>
@@ -36,6 +47,21 @@ export default function AdminRequestsPage() {
       ),
     refetchInterval: 30_000,
   });
+
+  // After the list renders, if the URL has #req-<id>, scroll to that
+  // card and flash it briefly so the operator sees which one was the
+  // notification target.
+  useEffect(() => {
+    if (!data) return;
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    if (!hash.startsWith('#req-')) return;
+    const el = document.getElementById(hash.slice(1));
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('ring-2', 'ring-amber-400');
+    const t = setTimeout(() => el.classList.remove('ring-2', 'ring-amber-400'), 2000);
+    return () => clearTimeout(t);
+  }, [data]);
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -152,7 +178,9 @@ function RequestCard({ req }: { req: AdminDealRequest }) {
   const isPending = req.status === 'pending';
 
   return (
-    <div className="rounded-xl border border-ink-200 bg-white p-5">
+    // id enables deep-link scroll-to from notifications
+    // (see /admin/requests/[id] redirect + list useEffect).
+    <div id={`req-${req.id}`} className="scroll-mt-4 rounded-xl border border-ink-200 bg-white p-5 transition">
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-2">

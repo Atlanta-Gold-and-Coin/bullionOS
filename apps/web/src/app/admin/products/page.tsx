@@ -30,6 +30,7 @@ import {
 import { rankProducts } from '@/lib/product-search';
 import { InlineField } from '@/components/inline-field';
 import { savePatch, saveOrder } from '@/lib/product-mutations';
+import type { SheetRow } from '@/lib/sheet-types';
 
 interface Product {
   id: string;
@@ -60,6 +61,20 @@ export default function ProductsPage() {
     queryKey: ['admin', 'products'],
     queryFn: () => apiFetch<Product[]>('/admin/products'),
   });
+  // The sheet endpoint carries live quantity_on_hand + available per
+  // product. Join by product_id so the Catalog row can show + edit stock
+  // without a second round-trip per row. Refreshes on the same cadence
+  // as the inventory page.
+  const { data: sheet } = useQuery({
+    queryKey: ['admin', 'products', 'sheet'],
+    queryFn: () => apiFetch<SheetRow[]>('/admin/products/sheet'),
+    refetchInterval: 60_000,
+  });
+  const stockByProduct = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of sheet ?? []) m.set(s.product_id, s.quantity_on_hand);
+    return m;
+  }, [sheet]);
 
   // Local mirror of the server order. We split by section for the DnD
   // contexts; on drop we persist the flattened order back to the server.
@@ -259,6 +274,7 @@ export default function ProductsPage() {
                   label={s.label}
                   rows={sectionRows.get(s.id)!}
                   dragDisabled={searchActive}
+                  stockByProduct={stockByProduct}
                 />
               ))}
             </div>
@@ -274,26 +290,30 @@ function CatalogSection({
   label,
   rows,
   dragDisabled,
+  stockByProduct,
 }: {
   id: string;
   label: string;
   rows: Product[];
   dragDisabled: boolean;
+  stockByProduct: Map<string, number>;
 }) {
   return (
     <section id={id} className="mt-4 scroll-mt-24">
       <h3 className="mb-2 text-sm font-semibold text-ink-700">{label}</h3>
       {/* MOB-002: horizontal scroll on narrow viewports. */}
       <div className="overflow-x-auto rounded-xl border border-ink-200 bg-white">
-        <table className="w-full min-w-[820px] text-sm">
+        <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
             <tr>
               <th className="w-8 px-2 py-3" />
               <th className="px-4 py-3">SKU</th>
               <th className="px-4 py-3">Name</th>
+              <th className="px-4 py-3">Metal</th>
               <th className="px-4 py-3 text-right">Weight (oz)</th>
               <th className="px-4 py-3 text-right">Purity</th>
               <th className="px-4 py-3 text-right">Content (oz)</th>
+              <th className="px-4 py-3 text-right">On hand</th>
               <th className="px-4 py-3 text-center">On website</th>
               <th className="px-4 py-3"></th>
             </tr>
@@ -304,7 +324,12 @@ function CatalogSection({
           >
             <tbody>
               {rows.map((p) => (
-                <SortableRow key={p.id} product={p} dragDisabled={dragDisabled} />
+                <SortableRow
+                  key={p.id}
+                  product={p}
+                  dragDisabled={dragDisabled}
+                  onHand={stockByProduct.get(p.id) ?? 0}
+                />
               ))}
             </tbody>
           </SortableContext>
@@ -317,9 +342,11 @@ function CatalogSection({
 function SortableRow({
   product,
   dragDisabled,
+  onHand,
 }: {
   product: Product;
   dragDisabled: boolean;
+  onHand: number;
 }) {
   const qc = useQueryClient();
   const [checked, setChecked] = useState(product.show_on_website);
@@ -400,6 +427,20 @@ function SortableRow({
           </span>
         )}
       </td>
+      <td className="px-4 py-3">
+        <select
+          value={product.metal}
+          onChange={(e) =>
+            savePatch(product.id, qc, { metal: e.target.value })
+          }
+          className="input h-8 py-0 text-xs capitalize"
+        >
+          <option value="gold">Gold</option>
+          <option value="silver">Silver</option>
+          <option value="platinum">Platinum</option>
+          <option value="palladium">Palladium</option>
+        </select>
+      </td>
       <td className="px-4 py-3 text-right font-mono">
         <InlineField
           value={String(product.weight_troy_oz)}
@@ -442,6 +483,9 @@ function SortableRow({
         {/* Content is derived (weight × purity) — read-only; auto-updates
             when weight or purity saves. */}
         {Number(product.metal_content_troy_oz).toFixed(4)}
+      </td>
+      <td className="px-4 py-3 text-right">
+        <StockCell productId={product.id} onHand={onHand} />
       </td>
       <td className="px-4 py-3 text-center">
         <label className="inline-flex cursor-pointer items-center">
@@ -574,5 +618,147 @@ function RestoreButton({
     >
       {busy ? '…' : 'Restore'}
     </button>
+  );
+}
+
+/**
+ * Inline inventory adjuster on the Catalog row. Hits
+ * PATCH /admin/inventory/:productId — the same endpoint the dedicated
+ * Products page uses. Delta can be positive (restock) or negative
+ * (manual shrinkage / transfer), non-zero integer only.
+ *
+ * Collapsed: shows the current on-hand value. Click to expand into a
+ * +/- numeric input. Every successful save invalidates the sheet +
+ * inventory queries so every other page shows the new count on its
+ * next fetch.
+ */
+function StockCell({
+  productId,
+  onHand,
+}: {
+  productId: string;
+  onHand: number;
+}) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [delta, setDelta] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function apply(raw: string) {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n === 0 || !Number.isInteger(n)) {
+      setErr('non-zero integer');
+      return;
+    }
+    setErr(null);
+    setBusy(true);
+    try {
+      await apiFetch(`/admin/inventory/${productId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ delta: n, notes: 'Catalog quick-adjust' }),
+      });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['admin', 'products', 'sheet'] }),
+        qc.invalidateQueries({ queryKey: ['admin', 'inventory'] }),
+      ]);
+      setDelta('');
+      setOpen(false);
+    } catch (e) {
+      setErr((e as Error).message ?? 'Failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    // Color key: positive = normal, zero = muted, negative = red (oversold,
+    // admin-only state). The number stays truthful for the operator; the
+    // public /public/in-stock endpoint already filters `> 0` so customers
+    // never see these — the red treatment here flags an inventory hole
+    // that should be closed by an incoming purchase or an adjustment.
+    const tone =
+      onHand > 0
+        ? 'text-ink-900'
+        : onHand < 0
+          ? 'font-semibold text-red-700'
+          : 'text-ink-400';
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-0.5 font-mono hover:border-ink-200"
+        title={
+          onHand < 0
+            ? 'Oversold (negative on-hand). Click to adjust.'
+            : 'Click to adjust'
+        }
+      >
+        <span className={tone}>{onHand}</span>
+      </button>
+    );
+  }
+  return (
+    <div className="inline-flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => apply('-1')}
+        disabled={busy}
+        aria-label="Decrement stock"
+        className="rounded-md border border-ink-200 px-1.5 text-sm hover:bg-red-50 hover:text-red-700 disabled:opacity-60"
+      >
+        −
+      </button>
+      <input
+        type="number"
+        step="1"
+        value={delta}
+        onChange={(e) => setDelta(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            apply(delta);
+          } else if (e.key === 'Escape') {
+            setDelta('');
+            setOpen(false);
+          }
+        }}
+        placeholder="+3 / -1"
+        className="input h-7 w-16 py-0 text-right font-mono text-xs"
+        disabled={busy}
+        autoFocus
+      />
+      <button
+        type="button"
+        onClick={() => apply('+1')}
+        disabled={busy}
+        aria-label="Increment stock"
+        className="rounded-md border border-ink-200 px-1.5 text-sm hover:bg-green-50 hover:text-green-700 disabled:opacity-60"
+      >
+        +
+      </button>
+      <button
+        type="button"
+        onClick={() => apply(delta)}
+        disabled={busy || delta === ''}
+        className="rounded-md bg-ink-900 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-ink-800 disabled:opacity-60"
+      >
+        {busy ? '…' : 'Save'}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setDelta('');
+          setErr(null);
+          setOpen(false);
+        }}
+        disabled={busy}
+        aria-label="Cancel"
+        className="rounded-md border border-ink-200 px-1 text-[11px] text-ink-500 hover:bg-ink-50"
+      >
+        ✕
+      </button>
+      {err && <span className="ml-1 text-[10px] text-red-700">{err}</span>}
+    </div>
   );
 }

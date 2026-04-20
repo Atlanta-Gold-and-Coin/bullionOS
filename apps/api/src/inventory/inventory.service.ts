@@ -107,10 +107,20 @@ export class InventoryService {
       invoice_id?: string | null;
       actor_user_id?: string | null;
       notes?: string | null;
+      /**
+       * Admin override that bypasses the on-hand guard. Lets inventory
+       * go negative and lets reservations exceed on-hand when the
+       * operator explicitly chose to oversell (rare — e.g. an agreed
+       * pre-sale against incoming stock). Still enforces the
+       * reservation-underflow guard because negative reserved values
+       * are never a valid state.
+       */
+      force?: boolean;
     },
   ): Promise<void> {
     const delta = params.delta;
     const reservedDelta = params.reserved_delta ?? 0;
+    const force = params.force === true;
     if (delta === 0 && reservedDelta === 0) return;
 
     // Lock the row (or the product's would-be row) for the remainder of the tx.
@@ -132,17 +142,19 @@ export class InventoryService {
     const nextOnHand = currentOnHand + delta;
     const nextReserved = currentReserved + reservedDelta;
 
-    if (nextOnHand < 0) {
+    if (!force && nextOnHand < 0) {
       throw new BadRequestException(
         `Insufficient on-hand stock for product ${params.product_id}: have ${currentOnHand}, needed ${-delta}`,
       );
     }
+    // Reservation-underflow is never legitimate (a release can't subtract
+    // more than was reserved), so we keep this check even under force.
     if (nextReserved < 0) {
       throw new BadRequestException(
         `Reservation underflow for product ${params.product_id}: reserved ${currentReserved}, releasing ${-reservedDelta}`,
       );
     }
-    if (nextReserved > nextOnHand) {
+    if (!force && nextReserved > nextOnHand) {
       throw new BadRequestException(
         `Cannot reserve more than is on hand for product ${params.product_id}: on_hand=${nextOnHand}, reserved=${nextReserved}`,
       );
@@ -217,7 +229,14 @@ export class InventoryService {
    */
   async reserveFor(
     trx: Transaction<DB>,
-    params: { product_id: string; qty: number; invoice_id: string; actor_user_id: string },
+    params: {
+      product_id: string;
+      qty: number;
+      invoice_id: string;
+      actor_user_id: string;
+      /** Admin override — bypass the on-hand ≥ reserved guard. */
+      force?: boolean;
+    },
   ): Promise<void> {
     if (params.qty <= 0) throw new BadRequestException('qty must be positive');
     await this.applyMovement(trx, {
@@ -227,6 +246,7 @@ export class InventoryService {
       reason: 'reservation',
       invoice_id: params.invoice_id,
       actor_user_id: params.actor_user_id,
+      force: params.force,
     });
   }
 
@@ -253,7 +273,19 @@ export class InventoryService {
    */
   async consumeReservationFor(
     trx: Transaction<DB>,
-    params: { product_id: string; qty: number; invoice_id: string; actor_user_id: string },
+    params: {
+      product_id: string;
+      qty: number;
+      invoice_id: string;
+      actor_user_id: string;
+      /**
+       * Admin override — must be set if this invoice was originally
+       * reserved under force (i.e. the reservation exceeds on-hand).
+       * Without it, the final deduction would trip the on-hand guard
+       * on a movement the operator already committed to.
+       */
+      force?: boolean;
+    },
   ): Promise<void> {
     if (params.qty <= 0) throw new BadRequestException('qty must be positive');
     await this.applyMovement(trx, {
@@ -263,6 +295,7 @@ export class InventoryService {
       reason: 'sale',
       invoice_id: params.invoice_id,
       actor_user_id: params.actor_user_id,
+      force: params.force,
     });
   }
 

@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError, getAccessToken } from '@/lib/api-client';
 import { StatusPill } from '@/components/status-pill';
 import { PageTint } from '@/components/page-tint';
+import { useAuth } from '@/lib/auth-context';
 
 interface LineItem {
   id: string;
@@ -72,6 +73,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const qc = useQueryClient();
   const router = useRouter();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  // Oversell override: admin-only. Lets a sell invoice finalize or consume
+  // stock that isn't (or won't be) on the shelf. Rare — used for agreed
+  // pre-sales against incoming shipments. Scoped to this page-load; the
+  // next successful status transition resets it so a distracted operator
+  // can't silently oversell on subsequent tickets.
+  const [forceOversell, setForceOversell] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'invoice', id],
     queryFn: () => apiFetch<InvoiceDetail>(`/admin/invoices/${id}`),
@@ -79,10 +88,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   async function setStatus(next: string) {
     try {
+      const body: Record<string, unknown> = { status: next };
+      // Only attach force_oversell on transitions that actually touch
+      // inventory — no-op transitions don't need it and sending it would
+      // muddy the audit log.
+      if (forceOversell && isAdmin && (next === 'finalized' || next === 'paid' || next === 'shipped')) {
+        body.force_oversell = true;
+      }
       await apiFetch(`/admin/invoices/${id}/status`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: next }),
+        body: JSON.stringify(body),
       });
+      setForceOversell(false);
       await qc.invalidateQueries({ queryKey: ['admin', 'invoice', id] });
       await qc.invalidateQueries({ queryKey: ['admin', 'invoices'] });
     } catch (err) {
@@ -219,6 +236,30 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             ))}
         </div>
       </header>
+
+      {/* Oversell override — admin-only, sell invoices only, and only while
+          there's still a stock-moving transition available. Consciously
+          placed outside the button row so it reads as a modifier, not a
+          mid-row control. Resets after the next successful transition. */}
+      {isAdmin &&
+        data.type === 'sell' &&
+        (options.some((o) => o.value === 'finalized' || o.value === 'paid' || o.value === 'shipped')) && (
+          <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <input
+              id="force-oversell"
+              type="checkbox"
+              checked={forceOversell}
+              onChange={(e) => setForceOversell(e.target.checked)}
+              className="mt-0.5"
+            />
+            <label htmlFor="force-oversell" className="leading-snug">
+              <span className="font-semibold">Override stock check</span> — allow
+              this invoice to reserve/consume more than is on hand. Used for
+              pre-sales against incoming stock. Inventory will go negative;
+              every movement is audit-logged.
+            </label>
+          </div>
+        )}
 
       <section className="mt-8 overflow-hidden rounded-xl border border-ink-200 bg-white">
         <table className="w-full text-sm">

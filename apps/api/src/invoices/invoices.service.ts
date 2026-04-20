@@ -463,7 +463,12 @@ export class InvoicesService {
     return updated as Invoice;
   }
 
-  async updateStatus(id: string, status: InvoiceStatus, actor: Actor): Promise<Invoice> {
+  async updateStatus(
+    id: string,
+    status: InvoiceStatus,
+    actor: Actor,
+    opts: { forceOversell?: boolean } = {},
+  ): Promise<Invoice> {
     const current = await this.db
       .selectFrom('invoices')
       .selectAll()
@@ -477,6 +482,12 @@ export class InvoicesService {
     if (status === 'canceled' && actor.role !== 'admin') {
       throw new ForbiddenException('Only admins can cancel invoices');
     }
+    // Oversell override is admin-only. Silently drop the flag for staff
+    // so a mis-checked UI checkbox on a non-admin session can't bypass
+    // the guard; the explicit ForbiddenException path is reserved for
+    // deliberate attempts (caller would have had to craft the request
+    // directly).
+    const forceOversell = opts.forceOversell === true && actor.role === 'admin';
 
     const patch: Partial<{
       status: InvoiceStatus;
@@ -554,6 +565,7 @@ export class InvoicesService {
                 qty: line.quantity,
                 invoice_id: id,
                 actor_user_id: actor.id,
+                force: forceOversell,
               });
               break;
             case 'consume':
@@ -562,6 +574,7 @@ export class InvoicesService {
                 qty: line.quantity,
                 invoice_id: id,
                 actor_user_id: actor.id,
+                force: forceOversell,
               });
               break;
             case 'release':
@@ -600,6 +613,7 @@ export class InvoicesService {
             from: current.status,
             to: status,
             inventory_action: inventoryAction?.kind ?? null,
+            force_oversell: forceOversell || undefined,
           })}::jsonb`,
         })
         .execute();

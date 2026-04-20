@@ -81,7 +81,12 @@ export class AdminInvoicesController {
     @Body() dto: UpdateInvoiceStatusDto,
     @CurrentUser() user: RequestUser,
   ) {
-    return this.invoices.updateStatus(id, dto.status, { id: user.id, role: user.role });
+    return this.invoices.updateStatus(
+      id,
+      dto.status,
+      { id: user.id, role: user.role },
+      { forceOversell: dto.force_oversell },
+    );
   }
 
   /**
