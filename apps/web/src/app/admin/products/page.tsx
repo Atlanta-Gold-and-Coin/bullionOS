@@ -792,36 +792,41 @@ function StockCell({
   }
 
   if (!open) {
-    // Color key: positive = normal, zero = muted, negative = red (oversold,
-    // admin-only state). The number stays truthful for the operator; the
-    // public /public/in-stock endpoint already filters `> 0` so customers
-    // never see these — the red treatment here flags an inventory hole
-    // that should be closed by an incoming purchase or an adjustment.
-    const tone =
-      onHand > 0
-        ? 'text-ink-900'
-        : onHand < 0
-          ? 'font-semibold text-red-700'
-          : 'text-ink-400';
+    // Display rule: never show a negative number to the operator. The
+    // DB + movement audit still tracks reality (a forced oversell
+    // leaves onHand < 0), but the UI clamps the visible count to 0
+    // and surfaces the shortage as a small "oversold by N" chip. This
+    // keeps the dashboards / sheets from reading as alarming-red
+    // while preserving the underlying accounting via the movement
+    // history. (Public /public/in-stock already filters > 0, so
+    // customers never see negatives regardless.)
+    const oversoldBy = onHand < 0 ? -onHand : 0;
+    const displayOnHand = Math.max(0, onHand);
+    const tone = displayOnHand > 0 ? 'text-ink-900' : 'text-ink-400';
     return (
       <button
         type="button"
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-0.5 font-mono hover:border-ink-200"
         title={
-          onHand < 0
-            ? 'Oversold (negative on-hand). Click to adjust.'
+          oversoldBy > 0
+            ? `Oversold by ${oversoldBy} (admin override). Click to adjust.`
             : reserved > 0
               ? `${reserved} reserved by open invoices. Click to adjust.`
               : 'Click to adjust'
         }
       >
-        <span className={tone}>{onHand}</span>
+        <span className={tone}>{displayOnHand}</span>
         {/* Reservation badge — folded in from the old Products page.
             Only renders when reserved > 0 so quiet rows stay quiet. */}
         {reserved > 0 && (
           <span className="rounded-full bg-amber-100 px-1.5 text-[9px] font-medium text-amber-700">
             {reserved}r
+          </span>
+        )}
+        {oversoldBy > 0 && (
+          <span className="rounded-full bg-red-100 px-1.5 text-[9px] font-medium text-red-700">
+            −{oversoldBy}
           </span>
         )}
       </button>

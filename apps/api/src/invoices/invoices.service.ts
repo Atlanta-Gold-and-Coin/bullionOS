@@ -625,17 +625,21 @@ export class InvoicesService {
   }
 
   /**
-   * Hard-delete a draft invoice and its line items. Only allowed while the
-   * invoice is still a draft — no reserved inventory, no audit impact on
-   * closed invoices. Returns the deleted invoice_number for the UI toast.
+   * Hard-delete a draft OR canceled invoice and its line items.
    *
-   * Guards:
-   *   - must be status='draft' (BadRequestException otherwise)
-   *   - line items cascade via FK ON DELETE (no manual cleanup)
+   *   - draft: anyone in admin/staff can delete (no reserved
+   *     inventory, no audit impact on closed invoices).
+   *   - canceled: admin-only. Canceled invoices are already
+   *     tombstoned in the history; deletion is a cleanup operation
+   *     reserved for scrubbing junk / test records. Inventory was
+   *     already released at cancel time (see classifyInventoryAction),
+   *     so no further stock movement happens here.
    *
-   * Emits `invoice.draft.delete` audit event. We intentionally do NOT
-   * release reserved inventory here because drafts don't reserve — see
-   * `classifyInventoryAction`: reservation happens on draft→finalized.
+   * Any other status rejects with 400 — operators must cancel first.
+   *
+   * Emits an audit event distinguishing the two paths
+   * (`invoice.draft.delete` or `invoice.canceled.delete`) so the
+   * action log stays precise.
    */
   async deleteDraft(id: string, actor: Actor): Promise<{ invoice_number: string }> {
     const current = await this.db
@@ -644,11 +648,21 @@ export class InvoicesService {
       .where('id', '=', id)
       .executeTakeFirst();
     if (!current) throw new NotFoundException('Invoice not found');
-    if (current.status !== 'draft') {
+    if (current.status !== 'draft' && current.status !== 'canceled') {
       throw new BadRequestException(
-        `Only draft invoices can be deleted. This invoice is ${current.status}; cancel it instead.`,
+        `Only draft or canceled invoices can be deleted. This invoice is ${current.status}; cancel it first.`,
       );
     }
+    if (current.status === 'canceled' && actor.role !== 'admin') {
+      throw new ForbiddenException(
+        'Only admins can delete canceled invoices',
+      );
+    }
+
+    const auditAction =
+      current.status === 'canceled'
+        ? 'invoice.canceled.delete'
+        : 'invoice.draft.delete';
 
     await this.db.transaction().execute(async (trx) => {
       await trx
@@ -660,12 +674,13 @@ export class InvoicesService {
         .insertInto('audit_logs')
         .values({
           actor_user_id: actor.id,
-          action: 'invoice.draft.delete',
+          action: auditAction,
           entity_type: 'invoice',
           entity_id: id,
           metadata: sql`${JSON.stringify({
             invoice_number: current.invoice_number,
             client_id: current.client_id,
+            prior_status: current.status,
           })}::jsonb`,
         })
         .execute();

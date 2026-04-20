@@ -2,9 +2,10 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
-import { apiFetch } from '@/lib/api-client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiFetch, ApiError } from '@/lib/api-client';
 import { StatusPill } from '@/components/status-pill';
+import { useAuth } from '@/lib/auth-context';
 
 interface InvoiceRow {
   id: string;
@@ -19,7 +20,7 @@ interface InvoiceRow {
   client_type: 'retail' | 'wholesaler';
 }
 
-type Tab = 'recent' | 'drafts' | 'sales' | 'purchase' | 'wholesale' | 'all';
+type Tab = 'recent' | 'drafts' | 'sales' | 'purchase' | 'wholesale' | 'canceled' | 'all';
 
 const TABS: Array<{ id: Tab; label: string }> = [
   // 'Recent' moved from the dashboard (Apr 2026) — top-level tab so
@@ -30,6 +31,9 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'sales', label: 'Sales' },
   { id: 'purchase', label: 'Purchase' },
   { id: 'wholesale', label: 'Wholesale' },
+  // Canceled rows are hard-deletable by admins — cleanup for test
+  // records or accidental voids.
+  { id: 'canceled', label: 'Canceled' },
   { id: 'all', label: 'All' },
 ];
 
@@ -49,6 +53,8 @@ function queryFor(tab: Tab): string {
       return '/admin/invoices?type=buy';
     case 'wholesale':
       return '/admin/invoices?client_type=wholesaler';
+    case 'canceled':
+      return '/admin/invoices?status=canceled';
     case 'recent':
     case 'all':
     default:
@@ -57,11 +63,31 @@ function queryFor(tab: Tab): string {
 }
 
 export default function InvoicesPage() {
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [tab, setTab] = useState<Tab>('recent');
   const { data } = useQuery({
     queryKey: ['admin', 'invoices', tab],
     queryFn: () => apiFetch<InvoiceRow[]>(queryFor(tab)),
   });
+
+  async function deleteRow(id: string, invoiceNumber: string) {
+    // Canceled-invoice deletion is admin-only + audit-logged on the
+    // server. We still confirm on the client because it's terminal.
+    if (
+      !confirm(
+        `Permanently delete invoice ${invoiceNumber}?\n\nThis removes the row and its line items. The audit log retains the delete event, but the invoice history itself is gone.`,
+      )
+    )
+      return;
+    try {
+      await apiFetch(`/admin/invoices/${id}`, { method: 'DELETE' });
+      await qc.invalidateQueries({ queryKey: ['admin', 'invoices'] });
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : 'Delete failed');
+    }
+  }
   // "Recent" is a compact top-N slice of the same payload "All" fetches.
   // Rendered-at-top-of-list is the UX win; the server payload is small
   // enough (<= 500 rows) that filtering client-side is fine.
@@ -107,6 +133,10 @@ export default function InvoicesPage() {
               <th className="px-4 py-3">Payment</th>
               <th className="px-4 py-3 text-right">Total</th>
               <th className="px-4 py-3 text-right">Created</th>
+              {/* Admin-only column: delete canceled invoices. Width
+                  kept narrow so it doesn't steal focus from the main
+                  data columns. */}
+              {isAdmin && tab === 'canceled' && <th className="px-4 py-3"></th>}
             </tr>
           </thead>
           <tbody>
@@ -136,6 +166,20 @@ export default function InvoicesPage() {
                 <td className="px-4 py-3 text-right text-ink-400">
                   {new Date(inv.created_at).toLocaleString()}
                 </td>
+                {isAdmin && tab === 'canceled' && (
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteRow(inv.id, inv.invoice_number);
+                      }}
+                      className="rounded-md border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50"
+                      title="Permanently delete this canceled invoice"
+                    >
+                      Delete
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
             {(!data || data.length === 0) && (

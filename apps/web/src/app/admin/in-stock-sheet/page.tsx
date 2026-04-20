@@ -473,12 +473,12 @@ function QtyAdjuster({
   }
 
   if (!open) {
-    const tone =
-      available > 0
-        ? 'text-ink-900'
-        : available < 0
-          ? 'font-semibold text-red-700'
-          : 'text-ink-400';
+    // Clamp visible count to 0; the DB / movement log still knows
+    // the truth. Small red chip surfaces the shortage without the
+    // whole number reading as alarming-red.
+    const oversoldBy = available < 0 ? -available : 0;
+    const displayAvailable = Math.max(0, available);
+    const tone = displayAvailable > 0 ? 'text-ink-900' : 'text-ink-400';
     return (
       <span className="inline-flex items-center gap-1 justify-end">
         <button
@@ -495,13 +495,18 @@ function QtyAdjuster({
           onClick={() => setOpen(true)}
           className={`rounded-md border border-transparent px-2 hover:border-ink-200 ${tone}`}
           title={
-            available < 0
-              ? 'Oversold (negative on-hand). Click for a larger adjustment.'
+            oversoldBy > 0
+              ? `Oversold by ${oversoldBy} (admin override). Click for a larger adjustment.`
               : 'Click for a larger adjustment'
           }
         >
-          {available}
+          {displayAvailable}
         </button>
+        {oversoldBy > 0 && (
+          <span className="rounded-full bg-red-100 px-1.5 text-[9px] font-medium text-red-700">
+            −{oversoldBy}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => apply('+1')}

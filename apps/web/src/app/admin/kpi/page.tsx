@@ -60,14 +60,25 @@ export default function KpiPage() {
     refetchInterval: 60_000,
   });
 
+  // Top running totals reflect the CURRENT period only — today for
+  // `day`, this-week for `week`, etc. The server always emits buckets
+  // ending at date_trunc(period, now() AT TIME ZONE 'America/New_York'),
+  // so the last row in the array is the active period. Previously we
+  // summed every bucket, which made "Daily" show a 30-day running
+  // total instead of just today.
+  //
+  // Rollover is automatic: once the wall-clock passes midnight US/
+  // Eastern, the next 60-second refetch returns a new "last bucket"
+  // whose bucket_start is the new day, and these cards reset.
   const totals = useMemo(() => {
-    const init = { sales: 0, purchases: 0, wholesale: 0 };
-    for (const b of data?.buckets ?? []) {
-      init.sales += Number(b.sales);
-      init.purchases += Number(b.purchases);
-      init.wholesale += Number(b.wholesale);
-    }
-    return init;
+    const rows = data?.buckets ?? [];
+    if (rows.length === 0) return { sales: 0, purchases: 0, wholesale: 0 };
+    const current = rows[rows.length - 1];
+    return {
+      sales: Number(current.sales),
+      purchases: Number(current.purchases),
+      wholesale: Number(current.wholesale),
+    };
   }, [data]);
 
   return (
@@ -101,7 +112,10 @@ export default function KpiPage() {
         {SERIES.map((s) => (
           <TotalCard
             key={s.key}
-            label={`${s.label} · last ${buckets} ${period}${buckets === 1 ? '' : 's'}`}
+            // Card label reflects the SINGLE current bucket rather than
+            // the whole window — "Today", "This week", etc. The
+            // timeline chart below still shows the N-bucket history.
+            label={`${s.label} · ${currentPeriodLabel(period)}`}
             value={totals[s.key]}
             color={s.color}
           />
@@ -405,6 +419,26 @@ function money(v: string | number) {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   })}`;
+}
+
+/**
+ * Natural-language label for the CURRENT bucket a TotalCard covers.
+ * Used in the top-totals copy; the timeline chart formats its own
+ * x-axis labels via formatBucketShort/formatBucket.
+ */
+function currentPeriodLabel(period: Period): string {
+  switch (period) {
+    case 'day':
+      return 'Today';
+    case 'week':
+      return 'This week';
+    case 'month':
+      return 'This month';
+    case 'quarter':
+      return 'This quarter';
+    case 'year':
+      return 'This year';
+  }
 }
 
 function formatBucket(iso: string, period: Period): string {
