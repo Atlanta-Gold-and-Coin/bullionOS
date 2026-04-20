@@ -17,6 +17,7 @@ import { ClientPortalModule } from './client-portal/client-portal.module';
 import { SettingsModule } from './settings/settings.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DealRequestsModule } from './deal-requests/deal-requests.module';
+import { DailyUpdatesModule } from './daily-updates/daily-updates.module';
 import { ShipmentsModule } from './shipments/shipments.module';
 import { EmailModule } from './email/email.module';
 import { SmsModule } from './sms/sms.module';
@@ -75,6 +76,7 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
     EmailModule,
     NotificationsModule,
     DealRequestsModule,
+    DailyUpdatesModule,
     ShipmentsModule,
     PriceQuotesModule,
     InventoryModule,

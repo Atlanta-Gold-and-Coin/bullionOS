@@ -83,6 +83,12 @@ export interface UsersTable {
   last_login_at: Timestamp | null;
   failed_login_count: ColumnType<number, number | undefined, number>;
   locked_until: Timestamp | null;
+  /**
+   * Gate for creating/editing/deleting Daily Updates on the admin
+   * dashboard (migration 026). Independent of role so delegation is a
+   * per-user flip, not a code change.
+   */
+  can_post_daily_update: ColumnType<boolean, boolean | undefined, boolean>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 }
@@ -325,6 +331,40 @@ export interface InvoiceLineItemsTable {
 export type InvoiceLineItem = Selectable<InvoiceLineItemsTable>;
 export type NewInvoiceLineItem = Insertable<InvoiceLineItemsTable>;
 
+// ===== Daily updates (migration 026) =====
+
+export interface DailyUpdatesTable {
+  id: Generated<string>;
+  body: string;
+  author_user_id: string;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+export type DailyUpdate = Selectable<DailyUpdatesTable>;
+export type NewDailyUpdate = Insertable<DailyUpdatesTable>;
+
+export interface DailyUpdateCommentsTable {
+  id: Generated<string>;
+  daily_update_id: string;
+  author_user_id: string;
+  body: string;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
+}
+export type DailyUpdateComment = Selectable<DailyUpdateCommentsTable>;
+export type NewDailyUpdateComment = Insertable<DailyUpdateCommentsTable>;
+
+export interface DailyUpdateAttachmentsTable {
+  id: Generated<string>;
+  daily_update_id: string;
+  filename: string;
+  mime: string;
+  bytes: Buffer;
+  created_at: Generated<Timestamp>;
+}
+export type DailyUpdateAttachment = Selectable<DailyUpdateAttachmentsTable>;
+export type NewDailyUpdateAttachment = Insertable<DailyUpdateAttachmentsTable>;
+
 // ===== Database root =====
 export interface DB {
   users: UsersTable;
@@ -350,6 +390,9 @@ export interface DB {
   integrations: IntegrationsTable;
   shipment_tracking_events: ShipmentTrackingEventsTable;
   calendar_bookings: CalendarBookingsTable;
+  daily_updates: DailyUpdatesTable;
+  daily_update_comments: DailyUpdateCommentsTable;
+  daily_update_attachments: DailyUpdateAttachmentsTable;
 }
 
 // ===== Calendar bookings (migration 023) =====

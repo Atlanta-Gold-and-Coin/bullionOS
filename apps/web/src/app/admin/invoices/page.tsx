@@ -19,9 +19,13 @@ interface InvoiceRow {
   client_type: 'retail' | 'wholesaler';
 }
 
-type Tab = 'drafts' | 'sales' | 'purchase' | 'wholesale' | 'all';
+type Tab = 'recent' | 'drafts' | 'sales' | 'purchase' | 'wholesale' | 'all';
 
 const TABS: Array<{ id: Tab; label: string }> = [
+  // 'Recent' moved from the dashboard (Apr 2026) — top-level tab so
+  // invoice triage has a single home. Defaults to the opening tab on
+  // this page.
+  { id: 'recent', label: 'Recent' },
   { id: 'drafts', label: 'Drafts' },
   { id: 'sales', label: 'Sales' },
   { id: 'purchase', label: 'Purchase' },
@@ -32,8 +36,8 @@ const TABS: Array<{ id: Tab; label: string }> = [
 /**
  * Map each tab to a server-side filter. Drafts cuts by status; Sales and
  * Purchase cut by invoice type (sell vs buy); Wholesale cuts by the
- * client's client_type. Passing the filter as a query param keeps the
- * payload small — no client-side filtering needed.
+ * client's client_type. Recent mirrors "All" server-side; the page
+ * slices to the top N on the client so the quick scan stays short.
  */
 function queryFor(tab: Tab): string {
   switch (tab) {
@@ -45,6 +49,7 @@ function queryFor(tab: Tab): string {
       return '/admin/invoices?type=buy';
     case 'wholesale':
       return '/admin/invoices?client_type=wholesaler';
+    case 'recent':
     case 'all':
     default:
       return '/admin/invoices';
@@ -52,11 +57,15 @@ function queryFor(tab: Tab): string {
 }
 
 export default function InvoicesPage() {
-  const [tab, setTab] = useState<Tab>('drafts');
+  const [tab, setTab] = useState<Tab>('recent');
   const { data } = useQuery({
     queryKey: ['admin', 'invoices', tab],
     queryFn: () => apiFetch<InvoiceRow[]>(queryFor(tab)),
   });
+  // "Recent" is a compact top-N slice of the same payload "All" fetches.
+  // Rendered-at-top-of-list is the UX win; the server payload is small
+  // enough (<= 500 rows) that filtering client-side is fine.
+  const displayRows = tab === 'recent' ? (data ?? []).slice(0, 15) : data ?? [];
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -101,7 +110,7 @@ export default function InvoicesPage() {
             </tr>
           </thead>
           <tbody>
-            {(data ?? []).map((inv) => (
+            {displayRows.map((inv) => (
               <tr key={inv.id} className="border-t border-ink-200 hover:bg-ink-50/50">
                 <td className="px-4 py-3 font-mono">
                   <Link href={`/admin/invoices/${inv.id}`} className="hover:underline">
