@@ -628,9 +628,13 @@ export default function NewInvoicePage() {
           </div>
 
           {/* Mobile scroll wrapper (MOB-001). On narrow viewports the wide
-              line row would otherwise clip at the edges. */}
-          <div className="mt-3 -mx-2 overflow-x-auto px-2">
-            <div className="min-w-[640px] space-y-3">
+              line row would otherwise clip at the edges.
+              md:overflow-visible is critical: `overflow-x: auto` implicitly
+              clamps overflow-y too, which clips the ProductCombobox dropdown
+              when it extends below the row. Desktop is always wider than
+              640px so we don't need scroll there anyway. */}
+          <div className="mt-3 -mx-2 overflow-x-auto px-2 md:mx-0 md:overflow-visible md:px-0">
+            <div className="min-w-[640px] space-y-3 md:min-w-0">
               {lines.map((line, idx) => (
                 <LineRow
                   key={idx}

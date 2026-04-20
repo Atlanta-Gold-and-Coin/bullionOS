@@ -127,7 +127,7 @@ export function ClientCombobox({
       {open && ranked.length > 0 && (
         <ul
           role="listbox"
-          className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-md border border-ink-200 bg-white shadow-lg"
+          className="absolute z-40 mt-1 max-h-72 w-full overflow-auto rounded-md border border-ink-200 bg-white shadow-lg"
         >
           {ranked.slice(0, 40).map((c, i) => (
             <li
@@ -162,7 +162,7 @@ export function ClientCombobox({
         </ul>
       )}
       {open && ranked.length === 0 && (
-        <div className="absolute z-20 mt-1 w-full rounded-md border border-ink-200 bg-white p-3 text-xs text-ink-500 shadow-lg">
+        <div className="absolute z-40 mt-1 w-full rounded-md border border-ink-200 bg-white p-3 text-xs text-ink-500 shadow-lg">
           No clients match &ldquo;{query}&rdquo;. Create the client first, then pick them
           here.
         </div>

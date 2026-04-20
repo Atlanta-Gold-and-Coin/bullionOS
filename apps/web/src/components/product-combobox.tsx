@@ -131,7 +131,12 @@ export function ProductCombobox({
       {open && (
         <ul
           id="product-combobox-list"
-          className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-md border border-ink-200 bg-white shadow-lg"
+          // z-40 beats any sibling section (which defaults to auto/0).
+          // Previously z-20 was enough but with the invoice wizard's
+          // multiple bg-white cards we want margin for error — later-DOM
+          // sections that happen to form a stacking context (transforms
+          // on hover, etc.) would otherwise paint over the dropdown.
+          className="absolute z-40 mt-1 max-h-72 w-full overflow-auto rounded-md border border-ink-200 bg-white shadow-lg"
           role="listbox"
         >
           <li
