@@ -87,27 +87,26 @@ export default function AdminInventoryPage() {
     [enrichedAll, search],
   );
 
-  // Group the enriched rows into the user-facing sections. Keep both
-  // in-stock and out-of-stock buckets per section so the counter can see
-  // everything in one place.
+  // Products page intentionally hides zero-stock items entirely. The
+  // operator's question here is "what can I actually sell right now",
+  // which means quantity_on_hand - reserved must be > 0. Zero-stock
+  // products still exist in the catalog and still appear on:
+  //   - /admin/buy-sheet (What We Pay, for quoting purchases — stock
+  //     is irrelevant when we're BUYING from the public)
+  //   - /admin/products  (Catalog — full CRUD view)
+  //   - /admin/products/[id] (per-product detail)
+  // so nothing is hidden away; it just doesn't clutter the live-sellable
+  // list on this page.
   const sectionRows = useMemo(() => {
-    const out = new Map<string, { inStock: EnrichedRow[]; outOfStock: EnrichedRow[] }>();
-    for (const section of sections) {
-      out.set(section.id, { inStock: [], outOfStock: [] });
-    }
-    // Ensure 'other' always exists so rows pinned to deleted slugs still
-    // render somewhere. knownSlugs excludes deleted customs already, so
-    // their displayCategory has been coerced to the heuristic default.
-    if (!out.has('other')) out.set('other', { inStock: [], outOfStock: [] });
+    const out = new Map<string, EnrichedRow[]>();
+    for (const section of sections) out.set(section.id, []);
+    if (!out.has('other')) out.set('other', []);
     for (const row of enriched) {
-      const b = out.get(row.displayCategory) ?? out.get('other')!;
-      if (row.available > 0) b.inStock.push(row);
-      else b.outOfStock.push(row);
+      if (row.available <= 0) continue;
+      const bucket = out.get(row.displayCategory) ?? out.get('other')!;
+      bucket.push(row);
     }
-    for (const bucket of out.values()) {
-      bucket.inStock.sort(compareByFamily);
-      bucket.outOfStock.sort(compareByFamily);
-    }
+    for (const bucket of out.values()) bucket.sort(compareByFamily);
     return out;
   }, [enriched, sections]);
 
@@ -117,11 +116,10 @@ export default function AdminInventoryPage() {
   );
   const inStockCount = enriched.filter((r) => r.available > 0).length;
 
-  // Visibility-hide empty sections so the jump bar stays tight on small
-  // catalogues. Expose both in-stock and out-of-stock counts for badges.
+  // Sections with zero in-stock rows get hidden from both the jump-bar
+  // and the main list; no more "Show N out-of-stock" toggle clutter.
   const sectionsToRender = sections.filter((s) => {
-    const b = sectionRows.get(s.id);
-    return b && (b.inStock.length + b.outOfStock.length) > 0;
+    return (sectionRows.get(s.id)?.length ?? 0) > 0;
   });
 
   return (
@@ -131,8 +129,9 @@ export default function AdminInventoryPage() {
           <div>
             <h1 className="text-2xl font-semibold">Products</h1>
             <p className="mt-1 text-sm text-ink-400">
-              Live stock grouped by family. In-stock items appear first in each
-              section; out-of-stock rows collapse below them.
+              What&rsquo;s live on the shelf right now. Zero-stock SKUs are hidden
+              here — find them on Catalog (for editing) or What we pay (for
+              quoting purchases).
             </p>
           </div>
         </div>
@@ -186,7 +185,7 @@ export default function AdminInventoryPage() {
                     {METAL_GROUPS[g.metal].label}
                   </span>
                   {g.sections.map((s) => {
-                    const b = sectionRows.get(s.id)!;
+                    const rows = sectionRows.get(s.id)!;
                     return (
                       <a
                         key={s.id}
@@ -195,7 +194,7 @@ export default function AdminInventoryPage() {
                       >
                         {s.label}
                         <span className="rounded-full bg-sell-100 px-1.5 text-[10px] text-sell-700">
-                          {b.inStock.length}
+                          {rows.length}
                         </span>
                       </a>
                     );
@@ -221,14 +220,13 @@ export default function AdminInventoryPage() {
                 {METAL_GROUPS[g.metal].label}
               </h2>
               {g.sections.map((s) => {
-                const b = sectionRows.get(s.id)!;
+                const rows = sectionRows.get(s.id)!;
                 return (
                   <CategorySection
                     key={s.id}
                     id={s.id}
                     label={s.label}
-                    inStock={b.inStock}
-                    outOfStock={b.outOfStock}
+                    rows={rows}
                   />
                 );
               })}
@@ -277,21 +275,18 @@ function SummaryCard({
 function CategorySection({
   id,
   label,
-  inStock,
-  outOfStock,
+  rows,
 }: {
   id: string;
   label: string;
-  inStock: EnrichedRow[];
-  outOfStock: EnrichedRow[];
+  rows: EnrichedRow[];
 }) {
-  const [showOut, setShowOut] = useState(false);
   return (
     <section id={id} className="mt-8 scroll-mt-24">
       <div className="mb-2 flex items-baseline justify-between">
         <h2 className="text-base font-semibold text-sell-700">{label}</h2>
         <span className="text-xs text-ink-400">
-          {inStock.length} in stock · {outOfStock.length} out of stock
+          {rows.length} in stock
         </span>
       </div>
       {/* MOB-002: horizontal scroll on narrow viewports. */}
@@ -306,31 +301,18 @@ function CategorySection({
             </tr>
           </thead>
           <tbody>
-            {inStock.map((r) => (
+            {rows.map((r) => (
               <InventoryRowView key={r.product_id} row={r} />
             ))}
-            {inStock.length === 0 && (
+            {rows.length === 0 && (
               <tr>
                 <td colSpan={4} className="px-4 py-6 text-center text-sm text-ink-400">
                   Nothing in stock in this category.
                 </td>
               </tr>
             )}
-            {showOut &&
-              outOfStock.map((r) => (
-                <InventoryRowView key={r.product_id} row={r} dimmed />
-              ))}
           </tbody>
         </table>
-        {outOfStock.length > 0 && (
-          <button
-            onClick={() => setShowOut((v) => !v)}
-            className="w-full border-t border-ink-100 bg-ink-50/60 px-4 py-2 text-left text-xs font-medium text-ink-600 hover:bg-ink-100"
-          >
-            {showOut ? '▾ Hide' : '▸ Show'} {outOfStock.length} out-of-stock row
-            {outOfStock.length === 1 ? '' : 's'}
-          </button>
-        )}
       </div>
     </section>
   );

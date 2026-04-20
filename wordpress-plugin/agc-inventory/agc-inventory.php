@@ -188,6 +188,12 @@ function agc_inv_ajax_live_inventory() {
     if ( ! is_array( $items ) ) {
         wp_send_json_error( [ 'message' => 'unavailable' ], 502 );
     }
+    // Mirror of the server filter. See PHP shortcode renderer for the
+    // full rationale — zero-stock rows never appear on the Live Inventory
+    // page, period, regardless of what the API hands us.
+    $items = array_values( array_filter( $items, function ( $r ) {
+        return isset( $r['available'] ) && intval( $r['available'] ) > 0;
+    } ) );
     $items   = agc_inv_filter_by_metal( $items, $metal );
     $grouped = agc_inv_group_by_metal( $items );
     wp_send_json_success( [
@@ -306,6 +312,13 @@ function agc_inv_render_live_inventory( $atts ) {
     if ( ! is_array( $items ) ) {
         return '<div class="agc-inv-error">Inventory is temporarily unavailable. Please refresh in a moment.</div>';
     }
+    // Defensive double-filter: the API's /public/in-stock already excludes
+    // zero-stock rows, but if a future bug ever lets one through (or the
+    // feed is ever pointed at a staging server with seeded zero-qty rows),
+    // we still refuse to show them on the live inventory page.
+    $items = array_values( array_filter( $items, function ( $r ) {
+        return isset( $r['available'] ) && intval( $r['available'] ) > 0;
+    } ) );
     $items = agc_inv_filter_by_metal( $items, $atts['metal'] );
     $grouped = agc_inv_group_by_metal( $items );
 

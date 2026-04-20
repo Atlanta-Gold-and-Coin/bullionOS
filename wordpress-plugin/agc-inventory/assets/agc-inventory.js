@@ -139,11 +139,16 @@
     for (var j = 0; j < rows.length; j++) {
       var r = rows[j];
       if (isLive) {
+        // Defensive: skip zero-stock rows even if the PHP layer ever
+        // slips up. A "0" qty on a live-inventory page would read as
+        // broken / misleading, never informative.
+        var qty = parseInt(r.available, 10);
+        if (!(qty > 0)) continue;
         body +=
           '<tr><td class="agc-inv-col-item"><span class="agc-inv-name">' +
           escapeHtml(r.name || '') +
           '</span></td><td class="agc-inv-col-qty">' +
-          parseInt(r.available, 10) +
+          qty +
           '</td></tr>';
       } else {
         body +=
