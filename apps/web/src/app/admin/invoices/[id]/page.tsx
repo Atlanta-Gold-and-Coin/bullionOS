@@ -116,6 +116,34 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
    * new-invoice wizard with ?from=<id> so every field pre-fills from
    * this ticket as a starting point.
    */
+  /**
+   * PIN-gated force delete. Works on any status except shipped (physical
+   * goods already out). Prompts twice: a confirm + a PIN entry, matching
+   * the product Purge pattern. Clears caches and routes back to the
+   * invoices list on success.
+   */
+  async function forceDelete() {
+    if (!data) return;
+    if (
+      !confirm(
+        `Permanently delete invoice ${data.invoice_number}?\n\nThis removes the row and all line items. No "Restore" afterwards. If you want a safe reversal, use Void & recreate instead.`,
+      )
+    )
+      return;
+    const pin = prompt('Enter delete PIN to confirm:');
+    if (!pin) return;
+    try {
+      await apiFetch(
+        `/admin/invoices/${id}?pin=${encodeURIComponent(pin.trim())}`,
+        { method: 'DELETE' },
+      );
+      await qc.invalidateQueries({ queryKey: ['admin', 'invoices'] });
+      router.push('/admin/invoices');
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : 'Delete failed');
+    }
+  }
+
   async function voidAndRecreate() {
     const msg =
       data?.status === 'draft'
@@ -297,6 +325,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           >
             Void &amp; recreate
           </button>
+          {/* Admin-only PIN-gated force delete. Hidden for staff and for
+              shipped tickets (server also rejects those). Kept visually
+              minor with red outline so it doesn't get mistaken for the
+              primary action. */}
+          {isAdmin && data.status !== 'shipped' && (
+            <button
+              onClick={forceDelete}
+              className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+              title="Permanently delete this invoice (PIN-gated)"
+            >
+              Delete
+            </button>
+          )}
           {/* Hide the generic "Mark paid" from the status dropdown for
               wholesalers — they use the dedicated green button above. */}
           {options

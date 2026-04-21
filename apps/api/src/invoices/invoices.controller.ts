@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   Param,
@@ -120,16 +121,34 @@ export class AdminInvoicesController {
   }
 
   /**
-   * Hard-delete a draft invoice. Guarded in the service to `status='draft'`
-   * only — the detail page's Cancel flow stays authoritative for anything
-   * already finalized. Returns the invoice_number for a toast. (INV-005)
+   * Hard-delete an invoice.
+   *
+   *   - No `pin`: operates on drafts (any role) or canceled invoices
+   *     (admin only) via deleteDraft — the existing safe path.
+   *   - `?pin=<PIN>`: PIN-gated force-delete. Works for every status
+   *     except `shipped`. Used to scrub mistakes that would otherwise
+   *     require Cancel first, Delete second.
+   *
+   * The PIN lives in `INVOICE_DELETE_PIN` (default `016275`). Identical
+   * mechanic to PRODUCT_DELETE_PIN — it's a "are you sure?" wall, not
+   * cryptographic auth.
    */
   @Delete(':id')
   @HttpCode(200)
-  deleteDraft(
+  deleteInvoice(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() user: RequestUser,
+    @Query('pin') pin?: string,
   ) {
+    if (pin !== undefined && pin !== '') {
+      const expected = process.env.INVOICE_DELETE_PIN || '016275';
+      if (pin.trim() !== expected) {
+        throw new ForbiddenException(
+          'Invalid delete PIN. Ask an admin if you don’t have it.',
+        );
+      }
+      return this.invoices.deleteForce(id, { id: user.id, role: user.role });
+    }
     return this.invoices.deleteDraft(id, { id: user.id, role: user.role });
   }
 

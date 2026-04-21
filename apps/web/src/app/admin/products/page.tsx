@@ -254,7 +254,10 @@ export default function ProductsPage() {
       </div>
 
       {sectionsToRender.length > 0 && (
-        <nav className="sticky top-0 z-10 -mx-2 mt-6 overflow-x-auto rounded-xl border border-ink-200 bg-white/95 px-2 py-2 backdrop-blur">
+        // top-14 sits exactly under the admin layout's sticky header
+        // (py-3 + SpotTicker ~= 56px). Without this the nav collides
+        // with the spot-ticker bar and hides behind it at scroll.
+        <nav className="sticky top-14 z-20 -mx-2 mt-6 overflow-x-auto rounded-xl border border-ink-200 bg-white/95 px-2 py-2 shadow-sm backdrop-blur">
           <div className="flex min-w-max items-center gap-4 text-xs">
             {groupSectionsByMetal(sectionsToRender).map((g) => (
               <div key={g.metal} className="flex items-center gap-1">

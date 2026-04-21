@@ -733,6 +733,54 @@ export class InvoicesService {
   }
 
   /**
+   * PIN-gated escape hatch to hard-delete an invoice in ANY status,
+   * bypassing the draft/canceled rule in deleteDraft(). Intended for
+   * mopping up obvious mistakes (double-finalized ticket, test data
+   * that slipped through) where the normal Cancel → Delete flow would
+   * be needlessly ceremonial.
+   *
+   * Caller is expected to have already validated the PIN at the
+   * controller layer. We still refuse on `shipped` status because
+   * physical goods have already moved — reversing that needs an
+   * explicit return flow, not a DELETE.
+   *
+   * Emits `invoice.force.delete` so the audit log captures the prior
+   * status (any stock-reversal review can start from this event).
+   */
+  async deleteForce(id: string, actor: Actor): Promise<{ invoice_number: string; prior_status: string }> {
+    const current = await this.db
+      .selectFrom('invoices')
+      .select(['id', 'status', 'invoice_number', 'client_id'])
+      .where('id', '=', id)
+      .executeTakeFirst();
+    if (!current) throw new NotFoundException('Invoice not found');
+    if (current.status === 'shipped') {
+      throw new BadRequestException(
+        'Shipped invoices cannot be force-deleted — goods are physically out. Use a return flow.',
+      );
+    }
+    await this.db.transaction().execute(async (trx) => {
+      await trx.deleteFrom('invoice_line_items').where('invoice_id', '=', id).execute();
+      await trx.deleteFrom('invoices').where('id', '=', id).execute();
+      await trx
+        .insertInto('audit_logs')
+        .values({
+          actor_user_id: actor.id,
+          action: 'invoice.force.delete',
+          entity_type: 'invoice',
+          entity_id: id,
+          metadata: sql`${JSON.stringify({
+            invoice_number: current.invoice_number,
+            client_id: current.client_id,
+            prior_status: current.status,
+          })}::jsonb`,
+        })
+        .execute();
+    });
+    return { invoice_number: current.invoice_number, prior_status: current.status };
+  }
+
+  /**
    * Render the invoice as PDF and email it to the given address. Does not
    * mutate invoice state — works on drafts too (INV-006, INV-007).
    *
