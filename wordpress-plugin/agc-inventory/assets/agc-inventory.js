@@ -124,7 +124,7 @@
       '</span>. Refreshes every minute between 8 AM – 6 PM Eastern. ' +
       (widget === 'live-inventory'
         ? 'Call <a href="tel:4042369744">404-236-9744</a> to confirm availability.'
-        : 'Prices are indicative; call <a href="tel:4042369744">404-236-9744</a> to lock in.') +
+        : 'Prices are indicative; call <a href="tel:4042369744">404-236-9744</a> to schedule your appointment.') +
       '</p>';
     root.innerHTML = html;
   }
