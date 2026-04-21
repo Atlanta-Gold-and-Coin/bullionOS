@@ -84,6 +84,80 @@ export class SettingsService {
       .execute();
   }
 
+  // ─── Email templates ───────────────────────────────────────────────
+  //
+  // Templates live in `app_settings` under keys of the shape
+  // `email.template.<slug>.subject` and `email.template.<slug>.body`.
+  // The caller supplies a slug (e.g. 'invoice') plus a variables map;
+  // renderEmailTemplate() substitutes {{var}} placeholders and returns
+  // the filled subject + body. When a template isn't stored yet, the
+  // caller's default is used — so adding a new email site on the
+  // backend is zero-config until an operator wants to customize it.
+  //
+  // Intentionally no HTML body field yet — every AGC email today is
+  // plain-text + PDF attachment, and operators write copy in plain
+  // text. Expand later if needed.
+
+  async getEmailTemplate(slug: string): Promise<{
+    subject: string | null;
+    body: string | null;
+  }> {
+    const all = await this.getAll();
+    return {
+      subject: (all[`email.template.${slug}.subject`] as string | null) ?? null,
+      body: (all[`email.template.${slug}.body`] as string | null) ?? null,
+    };
+  }
+
+  async setEmailTemplate(
+    slug: string,
+    patch: { subject?: string | null; body?: string | null },
+    actorId: string | null,
+  ): Promise<void> {
+    if (patch.subject !== undefined) {
+      if (patch.subject === null) {
+        await this.deleteKey(`email.template.${slug}.subject`);
+      } else {
+        await this.setString(
+          `email.template.${slug}.subject`,
+          patch.subject,
+          actorId,
+        );
+      }
+    }
+    if (patch.body !== undefined) {
+      if (patch.body === null) {
+        await this.deleteKey(`email.template.${slug}.body`);
+      } else {
+        await this.setString(
+          `email.template.${slug}.body`,
+          patch.body,
+          actorId,
+        );
+      }
+    }
+  }
+
+  private async deleteKey(key: string): Promise<void> {
+    await this.db.deleteFrom('app_settings').where('key', '=', key).execute();
+  }
+
+  /**
+   * Expand `{{name}}` placeholders against a variables map. Unknown
+   * placeholders stay verbatim (with the braces) so a typo in an
+   * editor reads like obvious output rather than silently dropping.
+   */
+  renderEmailTemplate(
+    template: string,
+    vars: Record<string, string | number | null | undefined>,
+  ): string {
+    return template.replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (match, key) => {
+      const v = vars[key];
+      if (v === null || v === undefined) return match;
+      return String(v);
+    });
+  }
+
   /**
    * Upsert a branding asset (logo, favicon, …) as raw bytes. Replaces any
    * prior asset for the same slug. Bytes go directly into bytea — Postgres

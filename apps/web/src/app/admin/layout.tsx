@@ -87,6 +87,9 @@ const NAV_ITEMS: NavEntry[] = [
       // the dashboard 12-month chart and KPI timeline for
       // month/quarter/year views.
       { href: '/admin/settings/kpi-manual', label: 'KPI history' },
+      // Editable copy for every system-sent email (invoice emails,
+      // etc.). Text-only, with {{variable}} substitution.
+      { href: '/admin/settings/email-templates', label: 'Email templates' },
     ],
   },
 ];

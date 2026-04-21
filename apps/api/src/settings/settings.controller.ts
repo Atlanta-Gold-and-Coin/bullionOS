@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   HttpCode,
+  Param,
   Patch,
   Post,
   Res,
@@ -29,6 +30,62 @@ class UpdateBrandingDto {
   @IsOptional() @IsString() @MaxLength(40) phone?: string;
   @IsOptional() @IsString() @MaxLength(120) website?: string;
 }
+
+class UpdateEmailTemplateDto {
+  // null on a field = reset to default. Both null = reset both.
+  // Empty string is a different shape from null and is disallowed at
+  // the UI layer — the admin page nudges operators to either fill
+  // content or click Restore.
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  subject?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10_000)
+  body?: string | null;
+}
+
+/**
+ * Registry of editable email templates. The admin UI iterates this
+ * to render the form per template. Each entry carries its own
+ * default text + the variable list that's available to the template
+ * so the operator knows what `{{placeholders}}` they can use.
+ */
+const EMAIL_TEMPLATE_REGISTRY: Array<{
+  slug: string;
+  label: string;
+  description: string;
+  default_subject: string;
+  default_body: string;
+  variables: Array<{ key: string; description: string }>;
+}> = [
+  {
+    slug: 'invoice',
+    label: 'Invoice email',
+    description:
+      'Sent when an operator clicks "Email" on an invoice. The invoice PDF is attached automatically — no need to reference it in the body.',
+    default_subject:
+      'Your {{doc_label}} from {{company_name}} — {{invoice_number}}',
+    default_body:
+      'Hi {{client_name}},\n\n' +
+      'Your {{doc_label}} {{invoice_number}} is attached as a PDF.\n' +
+      'Total: ${{total}}\n' +
+      'Status: {{status}}\n\n' +
+      'If you have questions, just reply to this email.\n\n' +
+      '— {{company_name}}',
+    variables: [
+      { key: 'client_name', description: 'Client’s full name (or company for wholesalers)' },
+      { key: 'invoice_number', description: 'Formatted invoice number, e.g. 2026-000123' },
+      { key: 'doc_label', description: '"invoice" or "buy ticket" depending on invoice type' },
+      { key: 'type', description: '"sell" or "buy" raw' },
+      { key: 'total', description: 'Dollar total, two decimals, no $' },
+      { key: 'status', description: 'draft / finalized / paid / shipped / canceled' },
+      { key: 'company_name', description: 'Your branded company name' },
+    ],
+  },
+];
 
 // Same mime + magic-byte validation for both logo and favicon. 1 MB max —
 // brand assets over that are rarely intentional, and this keeps DB bytea
@@ -117,6 +174,50 @@ export class SettingsController {
   @HttpCode(204)
   async removeFavicon() {
     await this.settings.deleteAsset('favicon');
+  }
+
+  /**
+   * List every editable email template with its registry metadata
+   * (label, description, default text, variable catalog) AND the
+   * currently-stored override (if any). One fetch drives the whole
+   * admin UI.
+   */
+  @Get('admin/settings/email-templates')
+  @Roles('admin')
+  async listEmailTemplates() {
+    const out: Array<{
+      slug: string;
+      label: string;
+      description: string;
+      default_subject: string;
+      default_body: string;
+      variables: Array<{ key: string; description: string }>;
+      current_subject: string | null;
+      current_body: string | null;
+    }> = [];
+    for (const entry of EMAIL_TEMPLATE_REGISTRY) {
+      const stored = await this.settings.getEmailTemplate(entry.slug);
+      out.push({
+        ...entry,
+        current_subject: stored.subject,
+        current_body: stored.body,
+      });
+    }
+    return out;
+  }
+
+  @Patch('admin/settings/email-templates/:slug')
+  @Roles('admin')
+  async updateEmailTemplate(
+    @Param('slug') slug: string,
+    @Body() dto: UpdateEmailTemplateDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    if (!EMAIL_TEMPLATE_REGISTRY.find((t) => t.slug === slug)) {
+      throw new BadRequestException(`Unknown email template: ${slug}`);
+    }
+    await this.settings.setEmailTemplate(slug, dto, user.id);
+    return this.settings.getEmailTemplate(slug);
   }
 
   /** Public: serves the logo for PDFs, email, and the web header. */

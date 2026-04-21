@@ -21,6 +21,7 @@ import { PricingService } from '../pricing/pricing.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { EmailService } from '../email/email.service';
+import { SettingsService } from '../settings/settings.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 import type { CreateInvoiceDto } from './dto/create-invoice.dto';
 
@@ -47,6 +48,7 @@ export class InvoicesService {
     private readonly inventory: InventoryService,
     private readonly email: EmailService,
     private readonly pdf: InvoicePdfService,
+    private readonly settings: SettingsService,
   ) {}
 
   /** Resolve the client record owned by the given user. Throws if none. */
@@ -763,17 +765,39 @@ export class InvoicesService {
     const pdfBuffer = Buffer.concat(chunks);
 
     const human = invoice.invoice_number;
-    const subject =
+    const docLabel = invoice.type === 'sell' ? 'invoice' : 'buy ticket';
+    const branding = await this.settings.getBranding();
+    // Pull the operator-editable template; fall back to the built-in
+    // defaults when they haven't customized one.
+    const tpl = await this.settings.getEmailTemplate('invoice');
+    const defaultSubject =
       invoice.type === 'sell'
-        ? `Your invoice from Atlanta Gold & Coin — ${human}`
-        : `Buy ticket from Atlanta Gold & Coin — ${human}`;
-    const body =
-      `Hi ${invoice.client_name},\n\n` +
-      `Your ${invoice.type === 'sell' ? 'invoice' : 'buy ticket'} ${human} is attached as a PDF.\n` +
-      `Total: $${Number(invoice.total).toFixed(2)}\n` +
-      `Status: ${invoice.status}\n\n` +
+        ? `Your invoice from {{company_name}} — {{invoice_number}}`
+        : `Buy ticket from {{company_name}} — {{invoice_number}}`;
+    const defaultBody =
+      `Hi {{client_name}},\n\n` +
+      `Your {{doc_label}} {{invoice_number}} is attached as a PDF.\n` +
+      `Total: \${{total}}\n` +
+      `Status: {{status}}\n\n` +
       `If you have questions, just reply to this email.\n\n` +
-      `— Atlanta Gold & Coin`;
+      `— {{company_name}}`;
+    const vars = {
+      client_name: invoice.client_name,
+      invoice_number: human,
+      doc_label: docLabel,
+      type: invoice.type,
+      total: Number(invoice.total).toFixed(2),
+      status: invoice.status,
+      company_name: branding.company_name,
+    };
+    const subject = this.settings.renderEmailTemplate(
+      tpl.subject ?? defaultSubject,
+      vars,
+    );
+    const body = this.settings.renderEmailTemplate(
+      tpl.body ?? defaultBody,
+      vars,
+    );
 
     await this.email.send({
       to,
