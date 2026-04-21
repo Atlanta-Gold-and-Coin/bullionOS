@@ -365,6 +365,28 @@ export interface DailyUpdateAttachmentsTable {
 export type DailyUpdateAttachment = Selectable<DailyUpdateAttachmentsTable>;
 export type NewDailyUpdateAttachment = Insertable<DailyUpdateAttachmentsTable>;
 
+// ===== Client attachments (migration 028) =====
+
+export type ClientAttachmentOcrStatus = 'pending' | 'succeeded' | 'failed';
+
+export interface ClientAttachmentsTable {
+  id: Generated<string>;
+  client_id: string;
+  /** Free-text tag — 'drivers_license', 'passport', 'other', etc. */
+  kind: ColumnType<string, string | undefined, string>;
+  filename: string;
+  mime: string;
+  bytes: Buffer;
+  size_bytes: number;
+  uploaded_by_user_id: string | null;
+  ocr_status: ClientAttachmentOcrStatus | null;
+  ocr_text: string | null;
+  ocr_fields: unknown;
+  created_at: Generated<Timestamp>;
+}
+export type ClientAttachment = Selectable<ClientAttachmentsTable>;
+export type NewClientAttachment = Insertable<ClientAttachmentsTable>;
+
 // ===== KPI manual entries (migration 027) =====
 
 export type KpiManualCategory = 'sales' | 'purchases' | 'wholesale';
@@ -414,6 +436,7 @@ export interface DB {
   daily_update_comments: DailyUpdateCommentsTable;
   daily_update_attachments: DailyUpdateAttachmentsTable;
   kpi_manual_entries: KpiManualEntriesTable;
+  client_attachments: ClientAttachmentsTable;
 }
 
 // ===== Calendar bookings (migration 023) =====

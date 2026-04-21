@@ -4,7 +4,7 @@ import { use, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiFetch, ApiError } from '@/lib/api-client';
+import { apiFetch, ApiError, getAccessToken } from '@/lib/api-client';
 import { StatusPill } from '@/components/status-pill';
 
 interface Client {
@@ -443,7 +443,225 @@ export default function ClientDetailPage({
           ))}
         </TimelineBlock>
       </section>
+
+      {/* Attachments — driver's license, passport, other ID/KYC docs.
+          Lives on the client record and is admin/staff-only. */}
+      <section className="mt-10">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-400">
+          Files &amp; ID documents
+        </h2>
+        <ClientAttachmentsPanel clientId={id} />
+      </section>
     </div>
+  );
+}
+
+interface AttachmentMeta {
+  id: string;
+  client_id: string;
+  kind: string;
+  filename: string;
+  mime: string;
+  size_bytes: number;
+  uploaded_by_user_id: string | null;
+  ocr_status: 'pending' | 'succeeded' | 'failed' | null;
+  ocr_fields: unknown;
+  created_at: string;
+}
+
+const ATTACHMENT_KINDS: Array<{ id: string; label: string }> = [
+  { id: 'drivers_license', label: "Driver's license" },
+  { id: 'passport', label: 'Passport' },
+  { id: 'id_other', label: 'Other ID' },
+  { id: 'receipt', label: 'Receipt' },
+  { id: 'contract', label: 'Contract' },
+  { id: 'photo', label: 'Photo' },
+  { id: 'other', label: 'Other' },
+];
+
+function ClientAttachmentsPanel({ clientId }: { clientId: string }) {
+  const qc = useQueryClient();
+  const { data: files, isLoading } = useQuery({
+    queryKey: ['admin', 'client', clientId, 'attachments'],
+    queryFn: () =>
+      apiFetch<AttachmentMeta[]>(`/admin/clients/${clientId}/attachments`),
+  });
+  const [kind, setKind] = useState<string>('drivers_license');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function uploadOne(file: File) {
+    setErr(null);
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      await apiFetch(
+        `/admin/clients/${clientId}/attachments?kind=${encodeURIComponent(kind)}`,
+        {
+          method: 'POST',
+          body: fd,
+        },
+      );
+      await qc.invalidateQueries({
+        queryKey: ['admin', 'client', clientId, 'attachments'],
+      });
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Upload failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(att: AttachmentMeta) {
+    if (!confirm(`Delete "${att.filename}"? This cannot be undone.`)) return;
+    try {
+      await apiFetch(`/admin/client-attachments/${att.id}`, { method: 'DELETE' });
+      await qc.invalidateQueries({
+        queryKey: ['admin', 'client', clientId, 'attachments'],
+      });
+    } catch (e) {
+      alert(e instanceof ApiError ? e.message : 'Delete failed');
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-4">
+      {/* Uploader */}
+      <div className="rounded-xl border border-ink-200 bg-white p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+              Document type
+            </span>
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+              className="input mt-1 md:w-52"
+            >
+              {ATTACHMENT_KINDS.map((k) => (
+                <option key={k.id} value={k.id}>
+                  {k.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="inline-flex cursor-pointer items-center gap-2">
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt"
+              onChange={async (e) => {
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = '';
+                for (const f of files) {
+                  await uploadOne(f);
+                }
+              }}
+            />
+            <span
+              className={`rounded-md border border-dashed border-ink-300 bg-white px-3 py-1.5 text-sm font-medium ${
+                busy ? 'opacity-60' : 'hover:bg-ink-50'
+              }`}
+            >
+              {busy ? 'Uploading…' : '+ Upload file'}
+            </span>
+          </label>
+          <span className="text-xs text-ink-400">15 MB max per file.</span>
+        </div>
+        {err && (
+          <p role="alert" className="mt-2 rounded-md bg-red-50 px-3 py-1.5 text-xs text-red-700">
+            {err}
+          </p>
+        )}
+      </div>
+
+      {/* File list */}
+      {isLoading ? (
+        <p className="text-sm text-ink-400">Loading…</p>
+      ) : (files ?? []).length === 0 ? (
+        <p className="text-sm text-ink-500">
+          No files yet. Upload a driver&apos;s license or other ID doc above.
+        </p>
+      ) : (
+        <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          {(files ?? []).map((f) => (
+            <AttachmentCard key={f.id} attachment={f} onDelete={remove} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function AttachmentCard({
+  attachment,
+  onDelete,
+}: {
+  attachment: AttachmentMeta;
+  onDelete: (att: AttachmentMeta) => void;
+}) {
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const isImage = attachment.mime.startsWith('image/');
+  const kindLabel =
+    ATTACHMENT_KINDS.find((k) => k.id === attachment.kind)?.label ??
+    attachment.kind;
+
+  async function openFile() {
+    const token = getAccessToken();
+    const res = await fetch(
+      `/api/v1/admin/client-attachments/${attachment.id}/file`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    if (isImage) {
+      setPreviewSrc(url);
+    } else {
+      window.open(url, '_blank');
+    }
+  }
+
+  return (
+    <li className="rounded-xl border border-ink-200 bg-white p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+            {kindLabel}
+          </div>
+          <button
+            onClick={openFile}
+            className="mt-0.5 block text-sm font-medium text-ink-900 hover:underline"
+            title="Open"
+          >
+            {isImage ? '📷' : '📎'} {attachment.filename}
+          </button>
+          <div className="mt-0.5 text-[11px] text-ink-400">
+            {(attachment.size_bytes / 1024).toFixed(0)} KB ·{' '}
+            {new Date(attachment.created_at).toLocaleDateString()}
+          </div>
+        </div>
+        <button
+          onClick={() => onDelete(attachment)}
+          aria-label="Delete attachment"
+          className="rounded-md border border-red-200 px-2 py-0.5 text-xs text-red-700 hover:bg-red-50"
+        >
+          Delete
+        </button>
+      </div>
+      {previewSrc && (
+        <div className="mt-3">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={previewSrc}
+            alt={attachment.filename}
+            className="max-h-64 w-full rounded-md border border-ink-200 object-contain"
+          />
+        </div>
+      )}
+    </li>
   );
 }
 
