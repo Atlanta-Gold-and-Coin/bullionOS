@@ -22,6 +22,10 @@ export class InvoicePdfService {
     // Pull the logo bytes straight from the DB. pdfkit can embed from a
     // Buffer, so no disk write + no /tmp dance.
     const logoAsset = await this.settings.getAsset('logo');
+    // Editable invoice copy. Each field is `null` when the operator
+    // hasn't customized it; the renderer falls through to the built-in
+    // default per type below.
+    const tpl = await this.settings.getInvoiceTemplate();
 
     const doc = new PDFDocument({
       size: 'LETTER',
@@ -235,15 +239,42 @@ export class InvoicePdfService {
       cursorY = doc.y + 14;
     }
 
+    // --- Operator footer comment (applies to every invoice) ---
+    // Rendered BEFORE the legal disclosure so the disclosure still
+    // reads as the final legal word on the document. Falls through
+    // silently when the operator hasn't set a footer.
+    if (tpl.footer_comment && tpl.footer_comment.trim().length > 0) {
+      if (cursorY > 620) {
+        doc.addPage();
+        cursorY = 54;
+      }
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(9)
+        .fillColor('#8a8a92')
+        .text('ADDITIONAL INFORMATION', 54, cursorY);
+      cursorY += 14;
+      doc
+        .font('Helvetica')
+        .fontSize(9)
+        .fillColor('#17171a')
+        .text(tpl.footer_comment, 54, cursorY, { width: 504 });
+      cursorY = doc.y + 14;
+    }
+
     // --- Per-side legal disclosure ---
     // Buy invoices: we are acquiring from the seller — include Seller Cert.
     // Sell invoices: we are transferring to the buyer — include market disclosure.
+    // Both bodies fall through to the built-in defaults below when the
+    // operator hasn't customized them on Settings → Invoice template.
     const disclosureTitle =
       invoice.type === 'buy' ? 'SELLER CERTIFICATION' : 'PRODUCT CONDITION & MARKET DISCLOSURE';
     const disclosureBody =
       invoice.type === 'buy'
-        ? 'The seller certifies that all items presented are owned outright and are not stolen or subject to any legal claim. Seller agrees to indemnify and hold harmless Atlanta Gold and Coin from any disputes arising from ownership claims.'
-        : 'Precious metals products are subject to market volatility. All sales are final once payment is confirmed. Atlanta Gold and Coin does not guarantee future market performance.';
+        ? tpl.disclosure_buy ??
+          'The seller certifies that all items presented are owned outright and are not stolen or subject to any legal claim. Seller agrees to indemnify and hold harmless Atlanta Gold and Coin from any disputes arising from ownership claims.'
+        : tpl.disclosure_sell ??
+          'Precious metals products are subject to market volatility. All sales are final once payment is confirmed. Atlanta Gold and Coin does not guarantee future market performance.';
 
     if (cursorY > 640) {
       doc.addPage();

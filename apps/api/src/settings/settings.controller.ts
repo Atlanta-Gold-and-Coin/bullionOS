@@ -31,6 +31,27 @@ class UpdateBrandingDto {
   @IsOptional() @IsString() @MaxLength(120) website?: string;
 }
 
+class UpdateInvoiceTemplateDto {
+  // All three fields are optional patches. null (or empty string) =
+  // "revert to built-in default"; non-empty string = "override with
+  // this text". Length caps keep the PDF layout from blowing past one
+  // page of footer on a verbose operator.
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  footer_comment?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  disclosure_buy?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  disclosure_sell?: string | null;
+}
+
 class UpdateEmailTemplateDto {
   // null on a field = reset to default. Both null = reset both.
   // Empty string is a different shape from null and is disallowed at
@@ -218,6 +239,37 @@ export class SettingsController {
     }
     await this.settings.setEmailTemplate(slug, dto, user.id);
     return this.settings.getEmailTemplate(slug);
+  }
+
+  /**
+   * Current invoice-template overrides + the built-in defaults so the
+   * admin UI can show a Restore-to-default affordance per field without
+   * a second roundtrip.
+   */
+  @Get('admin/settings/invoice-template')
+  @Roles('admin', 'staff')
+  async getInvoiceTemplate() {
+    const current = await this.settings.getInvoiceTemplate();
+    return {
+      current,
+      defaults: {
+        footer_comment: '',
+        disclosure_buy:
+          'The seller certifies that all items presented are owned outright and are not stolen or subject to any legal claim. Seller agrees to indemnify and hold harmless Atlanta Gold and Coin from any disputes arising from ownership claims.',
+        disclosure_sell:
+          'Precious metals products are subject to market volatility. All sales are final once payment is confirmed. Atlanta Gold and Coin does not guarantee future market performance.',
+      },
+    };
+  }
+
+  @Patch('admin/settings/invoice-template')
+  @Roles('admin')
+  async updateInvoiceTemplate(
+    @Body() dto: UpdateInvoiceTemplateDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    await this.settings.setInvoiceTemplate(dto, user.id);
+    return this.settings.getInvoiceTemplate();
   }
 
   /** Public: serves the logo for PDFs, email, and the web header. */

@@ -142,6 +142,51 @@ export class SettingsService {
     await this.db.deleteFrom('app_settings').where('key', '=', key).execute();
   }
 
+  // ─── Invoice template ─────────────────────────────────────────────
+  //
+  // Three editable strings layered on top of the hard-coded PDF
+  // renderer. Any field that's `null` falls through to the built-in
+  // default. Empty string is treated as null (= "use default") so the
+  // UI can restore defaults by clearing the textarea.
+
+  async getInvoiceTemplate(): Promise<{
+    footer_comment: string | null;
+    disclosure_buy: string | null;
+    disclosure_sell: string | null;
+  }> {
+    const all = await this.getAll();
+    const s = (k: string) => {
+      const v = all[k];
+      return typeof v === 'string' && v.length > 0 ? v : null;
+    };
+    return {
+      footer_comment: s('invoice.footer_comment'),
+      disclosure_buy: s('invoice.disclosure_buy'),
+      disclosure_sell: s('invoice.disclosure_sell'),
+    };
+  }
+
+  async setInvoiceTemplate(
+    patch: {
+      footer_comment?: string | null;
+      disclosure_buy?: string | null;
+      disclosure_sell?: string | null;
+    },
+    actorId: string | null,
+  ): Promise<void> {
+    const apply = async (key: string, val: string | null | undefined) => {
+      if (val === undefined) return;
+      if (val === null || val === '') {
+        await this.deleteKey(key);
+      } else {
+        await this.setString(key, val, actorId);
+      }
+    };
+    await apply('invoice.footer_comment', patch.footer_comment);
+    await apply('invoice.disclosure_buy', patch.disclosure_buy);
+    await apply('invoice.disclosure_sell', patch.disclosure_sell);
+  }
+
   /**
    * Expand `{{name}}` placeholders against a variables map. Unknown
    * placeholders stay verbatim (with the braces) so a typo in an

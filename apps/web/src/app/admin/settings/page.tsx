@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError, getAccessToken } from '@/lib/api-client';
 
@@ -44,6 +45,44 @@ export default function SettingsPage() {
         branding={data?.branding}
         onChanged={() => qc.invalidateQueries({ queryKey: ['admin', 'settings'] })}
       />
+
+      <section className="mt-6 rounded-xl border border-ink-200 bg-white p-5">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+          Other settings
+        </h2>
+        <ul className="mt-3 divide-y divide-ink-200 text-sm">
+          <li className="flex items-center justify-between py-2">
+            <div>
+              <div className="font-medium text-ink-900">Invoice template</div>
+              <div className="text-xs text-ink-500">
+                Footer comments + legal disclosure text that renders on
+                every invoice PDF.
+              </div>
+            </div>
+            <Link
+              href="/admin/settings/invoice-template"
+              className="rounded-md border border-ink-200 px-3 py-1 text-sm text-ink-700 hover:bg-ink-50"
+            >
+              Open →
+            </Link>
+          </li>
+          <li className="flex items-center justify-between py-2">
+            <div>
+              <div className="font-medium text-ink-900">Email templates</div>
+              <div className="text-xs text-ink-500">
+                Subject + body copy for operator-sent emails, with variable
+                placeholders.
+              </div>
+            </div>
+            <Link
+              href="/admin/settings/email-templates"
+              className="rounded-md border border-ink-200 px-3 py-1 text-sm text-ink-700 hover:bg-ink-50"
+            >
+              Open →
+            </Link>
+          </li>
+        </ul>
+      </section>
     </div>
   );
 }
