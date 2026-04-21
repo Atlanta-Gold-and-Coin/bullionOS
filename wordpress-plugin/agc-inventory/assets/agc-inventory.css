@@ -1,187 +1,233 @@
 /*!
- * AGC Inventory plugin — front-of-site theme.
+ * AGC Inventory plugin — front-of-site theme (v5).
  *
- * Color system (v2)
- *   --agc-bg        #05060d  near-black navy, full-bleed page base
- *   --agc-ink       #ede8df  off-white headings + primary readable text
- *   --agc-muted     #9e9585  warm gray secondary / body
- *   --agc-gold      #d4a017  primary gold — buttons, borders, highlights
- *   --agc-gold-soft #f0d58a  accent gold — hover + soft highlights
+ * Design goals
+ * ------------
+ *   1. Read as "financial luxury" — deep warm navy base, champagne gold
+ *      accents, tabular numerals. Not aggressive gold-on-black.
+ *   2. Spot strip is the hero at the top of What We Pay — 4 equal cards
+ *      with label, big price, and live ±change indicator.
+ *   3. Consistent vertical rhythm: 1.5rem between major blocks, 0.75rem
+ *      inside blocks. No orphan whitespace, no tight squeezes.
+ *   4. All rules scoped under .agc-inv-wrap so nothing leaks into the
+ *      shop's theme / Elementor styles.
  *
- * Font stack: Instrument Sans is loaded from Google Fonts (declared in
- *   agc-inventory.php wp_enqueue_style). Safe fallbacks keep the layout
- *   intact before the webfont lands so the LCP is never blank.
- *
- * Every rule is scoped under .agc-inv-wrap to avoid bleeding into the
- *   surrounding Elementor / theme stylesheet.
+ * Palette
+ * -------
+ *   --agc-bg          deep navy base
+ *   --agc-bg-soft     elevated surface (gradient, card backgrounds)
+ *   --agc-bg-card     spot-card fill, one step brighter than bg
+ *   --agc-ink         warm off-white, primary copy + headings text
+ *   --agc-muted       cool slate, secondary copy + labels
+ *   --agc-gold        champagne gold, single-source accent
+ *   --agc-gold-soft   lighter champagne for hover / price emphasis
+ *   --agc-up          muted green for positive % change
+ *   --agc-down        muted red  for negative % change
  */
 
 .agc-inv-wrap {
-    /* v4 palette — DEEP navy gradient base. Stays blue enough to read as
-     * "navy" rather than black, but dark enough to anchor a shop-page
-     * block without screaming. Metal-group headings pick up a muted
-     * gold-grey (brass) so they feel elegant rather than traffic-cone
-     * gold, while the bright --agc-gold is still there for accents
-     * (borders, links, focus rings). */
-    --agc-bg: #0a1528;
-    --agc-bg-soft: #142846;
-    --agc-ink: #ede8df;
-    --agc-muted: #9aa6b8;
-    --agc-gold: #d4a017;         /* bright gold — accents only */
-    --agc-gold-soft: #f0d58a;
-    --agc-brass: #b5a07a;        /* muted gold-grey for headings */
-    --agc-brass-soft: #d1c2a0;
+    --agc-bg: #0f1a2e;
+    --agc-bg-soft: #1b2a42;
+    --agc-bg-card: #16243b;
+    --agc-border: rgba(212, 176, 112, 0.22);
+    --agc-border-strong: rgba(212, 176, 112, 0.42);
+    --agc-ink: #f1ede2;
+    --agc-muted: #8b94a6;
+    --agc-gold: #d4b070;
+    --agc-gold-soft: #e8d4a0;
+    --agc-up: #6ddb92;
+    --agc-down: #e88d8d;
 
     font-family: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
     color: var(--agc-ink);
-    background: linear-gradient(
-        180deg,
-        var(--agc-bg-soft) 0%,
-        var(--agc-bg) 100%
-    );
+    background: linear-gradient(180deg, var(--agc-bg-soft) 0%, var(--agc-bg) 100%);
     padding: 1.75rem 1.5rem;
-    border-radius: 6px;
+    border-radius: 8px;
     max-width: 100%;
     letter-spacing: 0.01em;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 }
 
-/* Spot-price strip ──────────────────────────────── */
+/* ───────────── Spot-price strip ─────────────
+ *
+ * The centerpiece at the top of What We Pay. Four cards, each with a
+ * small uppercase label, a large tabular price, and a ±change row
+ * (arrow + delta + percent). Grid collapses to 2-up under 640px.
+ */
 
-/* Renders above the metal-group headings on the What We Pay widget only.
- * Responsive 4-up on desktop, collapses to 2-up on narrow viewports. */
 .agc-inv-wrap .agc-inv-spot-strip {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 0.5rem;
-    margin-bottom: 1.5rem;
+    gap: 0.75rem;
+    margin-bottom: 1.75rem;
 }
-@media (max-width: 560px) {
+@media (max-width: 640px) {
     .agc-inv-wrap .agc-inv-spot-strip {
         grid-template-columns: repeat(2, 1fr);
     }
 }
-/* Empty state (API cold / error) reserves the vertical room so layout
- * doesn't jump on the next successful poll. */
+/* When the spot endpoint is down / still loading, reserve vertical
+ * space so the page doesn't jump when the next poll succeeds. */
 .agc-inv-wrap .agc-inv-spot-strip[data-agc-spot="empty"] {
-    min-height: 3.25rem;
+    min-height: 5rem;
 }
 
 .agc-inv-wrap .agc-inv-spot {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.6rem 0.85rem;
-    border: 1px solid rgba(181, 160, 122, 0.3);
-    border-radius: 4px;
-    background: linear-gradient(
-        180deg,
-        rgba(181, 160, 122, 0.08) 0%,
-        rgba(181, 160, 122, 0.02) 100%
-    );
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--agc-border);
+    border-radius: 6px;
+    background: var(--agc-bg-card);
+    transition: border-color 200ms ease;
+}
+.agc-inv-wrap .agc-inv-spot:hover {
+    border-color: var(--agc-border-strong);
 }
 
 .agc-inv-wrap .agc-inv-spot-label {
     font-family: inherit;
     font-size: 0.7rem;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--agc-brass);
+    color: var(--agc-muted);
 }
 
 .agc-inv-wrap .agc-inv-spot-price {
-    font-family: 'Courier New', Consolas, monospace;
-    font-size: 0.95rem;
-    font-weight: 600;
+    font-family: 'Instrument Sans', system-ui, sans-serif;
+    font-size: 1.3rem;
+    font-weight: 700;
     color: var(--agc-ink);
     font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'lnum' 1;
+    letter-spacing: -0.005em;
+    line-height: 1.2;
 }
 
-/* Metal-group sections ──────────────────────────────── */
+.agc-inv-wrap .agc-inv-spot-change {
+    font-size: 0.72rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'lnum' 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+.agc-inv-wrap .agc-inv-spot-change--up {
+    color: var(--agc-up);
+}
+.agc-inv-wrap .agc-inv-spot-change--down {
+    color: var(--agc-down);
+}
+.agc-inv-wrap .agc-inv-spot-change--flat {
+    color: var(--agc-muted);
+}
+.agc-inv-wrap .agc-inv-spot-change-arrow {
+    font-size: 0.85em;
+    line-height: 1;
+}
+
+/* ───────────── Metal-group sections ───────────── */
 
 .agc-inv-wrap .agc-inv-section {
-    margin-bottom: 2rem;
+    margin-bottom: 1.75rem;
+}
+.agc-inv-wrap .agc-inv-section:last-child {
+    margin-bottom: 0.5rem;
 }
 
 .agc-inv-wrap .agc-inv-metal-heading {
     font-family: inherit;
-    font-size: 1.05rem;
+    font-size: 0.82rem;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: var(--agc-brass);
-    padding: 0.65rem 0.9rem;
-    margin: 0 0 0.75rem 0;
-    border: 1px solid rgba(181, 160, 122, 0.4);
-    border-radius: 4px;
+    color: var(--agc-gold);
+    padding: 0.6rem 0.9rem;
+    margin: 0 0 0.6rem 0;
+    border-left: 3px solid var(--agc-gold);
+    border-bottom: 1px solid var(--agc-border);
     background: linear-gradient(
-        180deg,
-        rgba(181, 160, 122, 0.10) 0%,
-        rgba(181, 160, 122, 0) 100%
+        90deg,
+        rgba(212, 176, 112, 0.07) 0%,
+        rgba(212, 176, 112, 0) 60%
     );
+    border-radius: 2px;
 }
 
-/* Per-metal accents use the muted brass palette uniformly — the original
- * plugin painted each metal with a different hue (amber, slate, sky,
- * violet). We keep the taxonomy tight on purpose: every metal gets the
- * same brass outline and differentiation is carried by the section
- * label text alone. Reserves bright --agc-gold for borders/links. */
+/* Every metal gets the same heading treatment — disciplined palette,
+ * not one color per metal. */
 .agc-inv-wrap .agc-inv-section--gold .agc-inv-metal-heading,
 .agc-inv-wrap .agc-inv-section--silver .agc-inv-metal-heading,
 .agc-inv-wrap .agc-inv-section--platinum .agc-inv-metal-heading,
 .agc-inv-wrap .agc-inv-section--palladium .agc-inv-metal-heading,
 .agc-inv-wrap .agc-inv-section--other .agc-inv-metal-heading {
-    background: linear-gradient(
-        180deg,
-        rgba(181, 160, 122, 0.10) 0%,
-        rgba(181, 160, 122, 0) 100%
-    );
-    border-color: rgba(181, 160, 122, 0.4);
-    color: var(--agc-brass);
+    color: var(--agc-gold);
+    border-left-color: var(--agc-gold);
 }
 
-/* Table ──────────────────────────────── */
+/* ───────────── Table ───────────── */
 
 .agc-inv-wrap .agc-inv-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.95rem;
-    margin-top: 0.4rem;
+    font-size: 0.93rem;
     background: transparent;
 }
 
 .agc-inv-wrap .agc-inv-table th,
 .agc-inv-wrap .agc-inv-table td {
-    border-bottom: 1px solid rgba(158, 149, 133, 0.18); /* muted @ 18% alpha */
-    padding: 0.7rem 0.9rem;
+    padding: 0.65rem 0.9rem;
     text-align: left;
     vertical-align: baseline;
+    border-bottom: 1px solid rgba(139, 148, 166, 0.15);
 }
 
 .agc-inv-wrap .agc-inv-table th {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.12em;
     color: var(--agc-muted);
     font-weight: 600;
     background: transparent;
-    border-bottom: 1px solid var(--agc-gold);
+    border-bottom: 1px solid var(--agc-border-strong);
+    padding-top: 0.35rem;
+    padding-bottom: 0.4rem;
 }
 
-.agc-inv-wrap .agc-inv-col-qty,
-.agc-inv-wrap .agc-inv-col-price {
+/* Column header text alignment mirrors cell alignment so they stack
+ * cleanly — qty right, We pay centered, item left. */
+.agc-inv-wrap .agc-inv-table th.agc-inv-col-qty {
+    text-align: right;
+}
+.agc-inv-wrap .agc-inv-table th.agc-inv-col-price {
+    text-align: center;
+}
+
+.agc-inv-wrap .agc-inv-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.agc-inv-wrap .agc-inv-col-qty {
     text-align: right;
     font-variant-numeric: tabular-nums;
-    /* Instrument Sans has tabular numerals built in — no need to swap to a
-     * monospace stack that would fight the font voice. */
     font-feature-settings: 'tnum' 1, 'lnum' 1;
-    width: 8rem;
-    color: var(--agc-gold-soft);
+    width: 9rem;
+    color: var(--agc-ink);
+    font-weight: 500;
 }
 
+/* We Pay column — centered inside its cell per operator spec, so the
+ * price sits visually on the column axis rather than hugging the right
+ * edge. Tabular numerals keep digits column-aligned across rows. */
 .agc-inv-wrap .agc-inv-col-price {
-    color: var(--agc-gold);
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'lnum' 1;
+    width: 9rem;
+    color: var(--agc-gold-soft);
     font-weight: 600;
 }
 
@@ -195,18 +241,19 @@
 }
 
 .agc-inv-wrap .agc-inv-table tbody tr:hover {
-    /* Accent gold at very low alpha — a warm wash that keeps the heavy
-     * navy background readable without flashing on scroll. */
-    background: rgba(240, 213, 138, 0.04);
+    background: rgba(212, 176, 112, 0.04);
 }
 
-/* Footnote ──────────────────────────── */
+/* ───────────── Footnote ───────────── */
 
 .agc-inv-wrap .agc-inv-footnote {
-    margin-top: 1.25rem;
-    font-size: 0.8rem;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--agc-border);
+    font-size: 0.78rem;
     color: var(--agc-muted);
     letter-spacing: 0.01em;
+    line-height: 1.55;
 }
 
 .agc-inv-wrap .agc-inv-footnote a {
@@ -215,7 +262,6 @@
     border-bottom: 1px solid transparent;
     transition: border-color 150ms ease, color 150ms ease;
 }
-
 .agc-inv-wrap .agc-inv-footnote a:hover {
     color: var(--agc-gold-soft);
     border-bottom-color: var(--agc-gold-soft);
@@ -223,71 +269,50 @@
 
 .agc-inv-wrap .agc-inv-updated {
     color: var(--agc-ink);
+    font-weight: 600;
 }
 
-/* Empty + error states ─────────────── */
+/* ───────────── Empty + error states ───────────── */
 
 .agc-inv-wrap .agc-inv-empty {
     padding: 1.75rem;
     text-align: center;
     color: var(--agc-muted);
-    background: var(--agc-bg-soft);
-    border: 1px dashed rgba(212, 160, 23, 0.4);
-    border-radius: 4px;
+    background: var(--agc-bg-card);
+    border: 1px dashed var(--agc-border-strong);
+    border-radius: 6px;
 }
 
-.agc-inv-error {
-    /* The error container is rendered as a sibling, NOT inside .agc-inv-wrap,
-     * so it falls back to the theme's body font. Keep styling self-contained. */
-    padding: 1rem 1.25rem;
-    background: #1a0e0e;
-    border: 1px solid #7a2b2b;
-    color: #f5c8c8;
-    border-radius: 4px;
-    font-family: 'Instrument Sans', system-ui, -apple-system, sans-serif;
-}
-
-/* v2 themed error card — lives inside .agc-inv-wrap so it inherits the
- * navy + gold palette and Instrument Sans automatically. Replaces the
- * red-on-dark-red .agc-inv-error container from v1 for a friendlier look
- * that doesn't scream "broken page" on a first visit while Railway is
- * cold-starting. */
 .agc-inv-wrap .agc-inv-error-card {
     padding: 1.25rem 1.5rem;
-    border: 1px solid var(--agc-gold);
-    border-radius: 4px;
-    background: linear-gradient(
-        180deg,
-        rgba(212, 160, 23, 0.08) 0%,
-        rgba(212, 160, 23, 0) 100%
-    );
+    border: 1px solid var(--agc-border-strong);
+    border-radius: 6px;
+    background: var(--agc-bg-card);
     color: var(--agc-ink);
     font-size: 0.95rem;
 }
-
 .agc-inv-wrap .agc-inv-error-card strong {
     color: var(--agc-gold);
     font-weight: 600;
 }
-
 .agc-inv-wrap .agc-inv-error-card a {
     color: var(--agc-gold);
     text-decoration: none;
     border-bottom: 1px solid var(--agc-gold-soft);
 }
-
 .agc-inv-wrap .agc-inv-error-card a:hover {
     color: var(--agc-gold-soft);
 }
 
-/* Refresh animation — swap the rows with a tasteful dim instead of a
- * snap so 1-minute polls don't flicker. */
+/* ───────────── Refresh animation ───────────── */
+
 .agc-inv-wrap.agc-inv-refreshing {
-    opacity: 0.7;
+    opacity: 0.75;
     transition: opacity 160ms ease-in-out;
 }
 
-/* Accessibility — focus rings in gold instead of the browser default. */
+/* ───────────── Accessibility ───────────── */
+
 .agc-inv-wrap a:focus-visible,
 .agc-inv-wrap button:focus-visible {
     outline: 2px solid var(--agc-gold);

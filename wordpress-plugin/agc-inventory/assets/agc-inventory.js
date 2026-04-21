@@ -219,6 +219,7 @@
     if (!spot) {
       return '<div class="agc-inv-spot-strip" data-agc-spot="empty"></div>';
     }
+    var change = spot.change && typeof spot.change === 'object' ? spot.change : {};
     var html = '<div class="agc-inv-spot-strip" data-agc-spot="ready">';
     for (var i = 0; i < metals.length; i++) {
       var m = metals[i];
@@ -234,7 +235,28 @@
         m.key +
         '">' +
         priceHtml +
-        '</span></div>';
+        '</span>';
+      // ±change row — same logic as the PHP renderer so both paint the
+      // same thing.
+      var c = change[m.key];
+      if (c && c.delta != null && c.percent != null) {
+        var delta = Number(c.delta);
+        var percent = Number(c.percent);
+        if (isFinite(delta) && isFinite(percent)) {
+          var dir = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+          var arrow = delta > 0 ? '▲' : delta < 0 ? '▼' : '—';
+          var sign = delta > 0 ? '+' : '';
+          html +=
+            '<span class="agc-inv-spot-change agc-inv-spot-change--' +
+            dir +
+            '"><span class="agc-inv-spot-change-arrow">' +
+            arrow +
+            '</span>' +
+            escapeHtml(sign + formatMoney(delta) + ' (' + sign + percent.toFixed(2) + '%)') +
+            '</span>';
+        }
+      }
+      html += '</div>';
     }
     html += '</div>';
     return html;

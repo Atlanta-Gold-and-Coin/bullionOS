@@ -5,7 +5,7 @@
  * Description:       Live inventory and "What We Pay" widgets for Atlanta
  *                    Gold & Coin, fed by the AGC Desk API. Elementor widgets
  *                    + shortcodes, auto-refreshing during shop hours.
- * Version:           2.0.4
+ * Version:           2.0.5
  * Author:            Atlanta Gold and Coin
  * License:           Proprietary
  * Text Domain:       agc-inventory
@@ -48,7 +48,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-define( 'AGC_INV_VERSION', '2.0.4' );
+define( 'AGC_INV_VERSION', '2.0.5' );
 define( 'AGC_INV_DEFAULT_BASE', 'https://agc-api-production.up.railway.app/api/v1' );
 // Server-side transient TTL. Short enough that a show_on_website toggle
 // in AGC Desk appears on the shop's WP page within ~15s, long enough
@@ -474,6 +474,7 @@ function agc_inv_render_spot_strip( $spot ) {
         'platinum'  => 'Platinum',
         'palladium' => 'Palladium',
     ];
+    $change = isset( $spot['change'] ) && is_array( $spot['change'] ) ? $spot['change'] : [];
     $html = '<div class="agc-inv-spot-strip" data-agc-spot="ready">';
     foreach ( $metals as $key => $label ) {
         $price = isset( $spot[ $key ] ) ? $spot[ $key ] : null;
@@ -484,6 +485,21 @@ function agc_inv_render_spot_strip( $spot ) {
             ? '$' . esc_html( number_format( floatval( $price ), 2 ) )
             : '&mdash;';
         $html .= '</span>';
+        // Change row: arrow + absolute delta + % change. Green when up,
+        // red when down, grey when flat/missing.
+        if ( isset( $change[ $key ] ) && is_array( $change[ $key ] ) ) {
+            $delta   = isset( $change[ $key ]['delta'] ) ? floatval( $change[ $key ]['delta'] ) : null;
+            $percent = isset( $change[ $key ]['percent'] ) ? floatval( $change[ $key ]['percent'] ) : null;
+            if ( $delta !== null && $percent !== null ) {
+                $dirClass = $delta > 0 ? 'up' : ( $delta < 0 ? 'down' : 'flat' );
+                $arrow    = $delta > 0 ? '▲' : ( $delta < 0 ? '▼' : '—' );
+                $sign     = $delta > 0 ? '+' : '';
+                $html .= '<span class="agc-inv-spot-change agc-inv-spot-change--' . esc_attr( $dirClass ) . '">';
+                $html .= '<span class="agc-inv-spot-change-arrow">' . $arrow . '</span>';
+                $html .= esc_html( $sign . number_format( $delta, 2 ) . ' (' . $sign . number_format( $percent, 2 ) . '%)' );
+                $html .= '</span>';
+            }
+        }
         $html .= '</div>';
     }
     $html .= '</div>';
