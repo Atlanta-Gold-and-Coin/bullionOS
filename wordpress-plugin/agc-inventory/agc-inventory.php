@@ -5,7 +5,7 @@
  * Description:       Live inventory and "What We Pay" widgets for Atlanta
  *                    Gold & Coin, fed by the AGC Desk API. Elementor widgets
  *                    + shortcodes, auto-refreshing during shop hours.
- * Version:           2.1.0
+ * Version:           2.2.0
  * Author:            Atlanta Gold and Coin
  * License:           Proprietary
  * Text Domain:       agc-inventory
@@ -48,7 +48,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-define( 'AGC_INV_VERSION', '2.1.0' );
+define( 'AGC_INV_VERSION', '2.2.0' );
 define( 'AGC_INV_DEFAULT_BASE', 'https://agc-api-production.up.railway.app/api/v1' );
 // Server-side transient TTL. Short enough that a show_on_website toggle
 // in AGC Desk appears on the shop's WP page within ~15s, long enough
@@ -329,6 +329,31 @@ add_action( 'wp_enqueue_scripts', function () {
         'windowStart' => AGC_INV_WINDOW_START_HOUR,
         'windowEnd'   => AGC_INV_WINDOW_END_HOUR,
     ] );
+
+    // Separate bundle for the buy-rates landing page. Registered here so
+    // enqueue inside the shortcode render is a no-op if multiple blocks
+    // appear on the same page. Inter font loaded independently because
+    // the buy-rates design uses Inter (matching atlantagoldandcoin.com),
+    // not the widget's Instrument Sans.
+    wp_register_style(
+        'agc-buy-font',
+        'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap',
+        [],
+        AGC_INV_VERSION
+    );
+    wp_register_style(
+        'agc-buy-rates',
+        plugins_url( 'assets/agc-buy-rates.css', __FILE__ ),
+        [ 'agc-buy-font' ],
+        AGC_INV_VERSION
+    );
+    wp_register_script(
+        'agc-buy-rates',
+        plugins_url( 'assets/agc-buy-rates.js', __FILE__ ),
+        [],
+        AGC_INV_VERSION,
+        true
+    );
 } );
 
 // ─── Shortcodes ────────────────────────────────────────────────────────────
@@ -341,6 +366,30 @@ add_shortcode( 'agc_live_inventory', function ( $atts ) {
 add_shortcode( 'agc_what_we_pay', function ( $atts ) {
     $atts = shortcode_atts( [ 'metal' => '' ], $atts, 'agc_what_we_pay' );
     return agc_inv_render_what_we_pay( $atts );
+} );
+
+/**
+ * Full buy-rates landing-page layout: hero + explainer content + CTA +
+ * right-side sliding drawer wrapping a Gravity Form. The drawer ONLY
+ * opens when the "Schedule Appointment" CTA is clicked, so the form
+ * is out of the way on first read but one tap away.
+ *
+ * Attributes:
+ *   form_id    — Gravity Form id (default "2")
+ *   show_pay   — include the [agc_what_we_pay] widget beneath the rates
+ *                intro ("1" to render, default "0"). Skip if you insert
+ *                the widget manually elsewhere on the page.
+ */
+add_shortcode( 'agc_buy_rates_page', function ( $atts ) {
+    $atts = shortcode_atts(
+        [
+            'form_id'  => '2',
+            'show_pay' => '0',
+        ],
+        $atts,
+        'agc_buy_rates_page'
+    );
+    return agc_inv_render_buy_rates_page( $atts );
 } );
 
 // ─── Renderers ─────────────────────────────────────────────────────────────
@@ -470,6 +519,110 @@ function agc_inv_render_what_we_pay( $atts ) {
  * Returns empty string when spot payload is missing or malformed so the
  * widget still paints instead of showing a broken "Loading..." placeholder.
  */
+/**
+ * Buy-rates landing page — hero, prose, CTA, and a right-side slide-in
+ * drawer that wraps a Gravity Form. Enqueues the page-level stylesheet
+ * and JS on demand (the widget-level assets are a separate bundle).
+ *
+ * The Gravity Form shortcode is expanded via do_shortcode() so WP's
+ * Gravity Forms plugin renders it inside the drawer — no manual field
+ * rebuild on our side.
+ */
+function agc_inv_render_buy_rates_page( $atts ) {
+    wp_enqueue_style( 'agc-buy-rates' );
+    wp_enqueue_script( 'agc-buy-rates' );
+    // Widget stylesheet used by the inline [agc_what_we_pay] if show_pay=1.
+    if ( '1' === (string) $atts['show_pay'] ) {
+        wp_enqueue_style( 'agc-inv' );
+        wp_enqueue_script( 'agc-inv' );
+    }
+
+    $form_id = absint( $atts['form_id'] ) ?: 2;
+    $form_shortcode = '[gravityform id="' . $form_id . '" title="true" description="false"]';
+    $form_html = do_shortcode( $form_shortcode );
+
+    ob_start();
+    ?>
+    <div id="agc-buy">
+        <!-- HERO -->
+        <section class="buy-hero">
+            <div class="buy-hero-inner">
+                <div class="buy-hero-badge">Transparent Rates</div>
+                <h1>Our Rates for <span>Buying Coins</span></h1>
+                <p class="buy-sub">Concierge Service. Transparent Pricing. Guaranteed Rates.</p>
+            </div>
+        </section>
+
+        <!-- WHY SELL -->
+        <div class="buy-content">
+            <h2>Why Sell to Atlanta Gold &amp; Coin?</h2>
+            <p>When you&rsquo;re thinking about selling your coins, bullion, or coin collection, you&rsquo;ll want to shop around to get as much as possible for them. You won&rsquo;t find better gold coin prices or buying rates in the Atlanta area than at Atlanta Gold &amp; Coin.</p>
+            <p>We offer among the most competitive rates in the industry for your gold, silver, platinum, palladium, coins, coin collections, bullion, bars, rounds, ingots, and more! But don&rsquo;t take our word for it&mdash;call around and check out the rates of our competitors for yourself&mdash;if they&rsquo;ll even reveal their rates; most other coin and bullion dealers like to keep their rates secret. Sometimes they will not even give quotes over the phone and try to pressure you to visit their place of business before they give any idea what they are paying.</p>
+            <div class="buy-highlight">
+                <p>At Atlanta Gold and Coin, we believe in transparency and are proud to provide our buying rates over the phone and also post our buying rates online. We know your time is as valuable as your coins, and we want to do whatever we can to help you make an informed decision when it comes time to sell.</p>
+            </div>
+            <p>You have the option to <a href="https://atlantagoldandcoin.com/sell-coins-online/" class="buy-link-green">mail in your coins</a>, or contact us to schedule an appointment to have us review and approve the coins you wish to sell.</p>
+        </div>
+
+        <!-- PROCESS -->
+        <div class="buy-process">
+            <div class="buy-process-inner">
+                <h2>Our Buying Process</h2>
+                <p>During your appointment, we will evaluate your items and make a no-obligation offer. At Atlanta Gold &amp; Coin, you&rsquo;ll never be pressured into selling when you aren&rsquo;t ready. If you accept our offer, we&rsquo;ll pay you on the spot via a company check or cash, if available. Other payment options may be available for sizable transactions.</p>
+                <p>If you live outside the Atlanta area and send us your items for a mail-in appraisal, we&rsquo;ll notify you upon receipt of the items and will complete our evaluation and quote within one business day. If you accept the offer, we&rsquo;ll mail you a check. If you choose not to sell, we&rsquo;ll send the items back to you, return shipping on us (provided you contacted us before mailing your items to receive approval).</p>
+            </div>
+        </div>
+
+        <!-- RATES INTRO -->
+        <div class="buy-rates-intro">
+            <h2>Our Buying Rates</h2>
+            <p>Please note that the following rates are for common date average circulated condition coins, except for modern-issued investment coins, which are expected to be in uncirculated condition. We always pay premium rates for high-end condition and <a href="https://atlantagoldandcoin.com/rare-coin-guide/" class="buy-link-green">rare or key date coins</a> taking into consideration the year, where the coin was minted, the condition, the total number of coins produced and if the coin is certified by a third party grading service, such as NGC and PCGS.</p>
+        </div>
+
+        <?php if ( '1' === (string) $atts['show_pay'] ): ?>
+            <div class="buy-rates-widget"><?php echo do_shortcode( '[agc_what_we_pay]' ); ?></div>
+        <?php endif; ?>
+
+        <!-- CTA BANNER -->
+        <div class="buy-cta">
+            <div class="buy-cta-inner">
+                <p>Ready to sell your coins or bullion? Fill out our contact form or call to schedule your appointment!</p>
+                <button type="button" class="buy-cta-btn" data-agc-buy-open="1">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                    Schedule Appointment
+                </button>
+                <a href="tel:+14042369744" class="buy-cta-phone">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                    (404) 236-9744
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- SIDE DRAWER (appointment form) -->
+    <button type="button" class="buy-drawer-fab" data-agc-buy-open="1" aria-label="Schedule appointment">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span class="buy-drawer-fab-label">Schedule</span>
+    </button>
+    <div class="buy-drawer-overlay" data-agc-buy-overlay hidden></div>
+    <aside class="buy-drawer" aria-hidden="true" aria-labelledby="buy-drawer-title" data-agc-buy-drawer>
+        <div class="buy-drawer-header">
+            <div>
+                <h2 id="buy-drawer-title">Schedule an Appointment</h2>
+                <p>Meet with a specialist to discuss selling your coins, bullion, or collection.</p>
+            </div>
+            <button type="button" class="buy-drawer-close" data-agc-buy-close="1" aria-label="Close appointment form">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="buy-drawer-body">
+            <?php echo $form_html; // Gravity Forms output is already escaped/sanitized by the GF plugin. ?>
+        </div>
+    </aside>
+    <?php
+    return ob_get_clean();
+}
+
 function agc_inv_render_spot_strip( $spot ) {
     if ( ! is_array( $spot ) ) {
         return '<div class="agc-inv-spot-strip" data-agc-spot="empty"></div>';

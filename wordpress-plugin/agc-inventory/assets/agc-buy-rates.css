@@ -1,0 +1,414 @@
+/*!
+ * AGC Buy Rates landing page — companion stylesheet for the
+ * [agc_buy_rates_page] shortcode. Palette + typography mirror
+ * atlantagoldandcoin.com: Inter font, charcoal hero/CTA bands, warm
+ * gold (#EBC631) accents, sage green (#889963) for secondary links.
+ *
+ * Drawer behavior
+ * ---------------
+ * The Gravity Form lives off-canvas in a right-side aside. A small
+ * floating "Schedule" pill (FAB) stays in the bottom-right of the
+ * viewport and slides the drawer open; so does the CTA banner button.
+ * When open, a translucent overlay blocks the page body and the drawer
+ * traps focus. ESC or overlay click closes it.
+ */
+
+#agc-buy {
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    color: #333;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    margin: 0 auto;
+    max-width: 100%;
+}
+#agc-buy *,
+#agc-buy *::before,
+#agc-buy *::after {
+    box-sizing: border-box;
+}
+#agc-buy h1,
+#agc-buy h2,
+#agc-buy h3,
+#agc-buy h4 {
+    margin: 0;
+    line-height: 1.2;
+}
+#agc-buy p {
+    margin: 0 0 1em;
+}
+#agc-buy a {
+    color: #ebc631;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+#agc-buy a:hover {
+    color: #d4b12a;
+}
+#agc-buy .buy-link-green {
+    color: #889963;
+    font-weight: 600;
+    border-bottom: 1px solid rgba(136, 153, 99, 0.3);
+}
+#agc-buy .buy-link-green:hover {
+    color: #6d7d4e;
+}
+
+/* HERO ============================================================ */
+#agc-buy .buy-hero {
+    background: linear-gradient(135deg, #1d2327 0%, #2c3338 50%, #1d2327 100%);
+    color: #fff;
+    padding: 60px 40px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+}
+#agc-buy .buy-hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23EBC631' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E") repeat;
+    opacity: 0.5;
+}
+#agc-buy .buy-hero-inner {
+    position: relative;
+    z-index: 1;
+    max-width: 900px;
+    margin: 0 auto;
+}
+#agc-buy .buy-hero-badge {
+    display: inline-block;
+    background: rgba(235, 198, 49, 0.15);
+    color: #ebc631;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    padding: 6px 18px;
+    border-radius: 30px;
+    border: 1px solid rgba(235, 198, 49, 0.25);
+    margin-bottom: 20px;
+}
+#agc-buy .buy-hero h1 {
+    font-size: 42px;
+    font-weight: 800;
+    margin-bottom: 12px;
+    letter-spacing: -1px;
+}
+#agc-buy .buy-hero h1 span {
+    color: #ebc631;
+}
+#agc-buy .buy-hero .buy-sub {
+    font-size: 18px;
+    color: rgba(255, 255, 255, 0.7);
+    max-width: 640px;
+    margin: 0 auto;
+}
+
+/* CONTENT ========================================================= */
+#agc-buy .buy-content {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 48px 40px;
+}
+#agc-buy .buy-content h2,
+#agc-buy .buy-process h2,
+#agc-buy .buy-rates-intro h2 {
+    font-size: 26px;
+    font-weight: 800;
+    color: #1d2327;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 3px solid #ebc631;
+    display: inline-block;
+}
+#agc-buy .buy-content p,
+#agc-buy .buy-process p,
+#agc-buy .buy-rates-intro p {
+    font-size: 16px;
+    color: #444;
+    line-height: 1.75;
+    margin-bottom: 16px;
+}
+#agc-buy .buy-highlight {
+    background: #f8f8f5;
+    border-left: 4px solid #889963;
+    padding: 20px 24px;
+    border-radius: 0 8px 8px 0;
+    margin: 24px 0;
+}
+#agc-buy .buy-highlight p {
+    margin-bottom: 0;
+    font-size: 15px;
+    color: #555;
+}
+
+/* PROCESS ========================================================= */
+#agc-buy .buy-process {
+    background: #f8f8f5;
+    padding: 48px 40px;
+}
+#agc-buy .buy-process-inner {
+    max-width: 900px;
+    margin: 0 auto;
+}
+#agc-buy .buy-process h2 {
+    margin-bottom: 24px;
+}
+
+/* RATES INTRO ===================================================== */
+#agc-buy .buy-rates-intro {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 48px 40px 24px;
+}
+
+/* Inline What We Pay widget (show_pay="1") — sits inside the page
+ * max-width rail so it matches the surrounding prose. */
+#agc-buy .buy-rates-widget {
+    max-width: 900px;
+    margin: 0 auto 8px;
+    padding: 0 40px 32px;
+}
+
+/* CTA BANNER ====================================================== */
+#agc-buy .buy-cta {
+    background: linear-gradient(135deg, #1d2327 0%, #2c3338 100%);
+    padding: 40px;
+    text-align: center;
+    color: #fff;
+}
+#agc-buy .buy-cta-inner {
+    max-width: 900px;
+    margin: 0 auto;
+}
+#agc-buy .buy-cta p {
+    font-size: 17px;
+    color: rgba(255, 255, 255, 0.8);
+    margin-bottom: 20px;
+}
+#agc-buy .buy-cta-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 36px;
+    border-radius: 8px;
+    background: #ebc631;
+    color: #1d2327;
+    font-size: 16px;
+    font-weight: 700;
+    transition: all 0.2s;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    text-decoration: none;
+}
+#agc-buy .buy-cta-btn:hover {
+    background: #d4b12a;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(235, 198, 49, 0.3);
+    color: #1d2327;
+}
+#agc-buy .buy-cta-phone {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 36px;
+    border-radius: 8px;
+    background: transparent;
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    transition: all 0.2s;
+    border: 1.5px solid rgba(255, 255, 255, 0.3);
+    margin-left: 12px;
+    text-decoration: none;
+}
+#agc-buy .buy-cta-phone:hover {
+    border-color: #ebc631;
+    color: #ebc631;
+}
+
+/* MOBILE breakpoints for page body =============================== */
+@media (max-width: 900px) {
+    #agc-buy .buy-hero {
+        padding: 40px 24px;
+    }
+    #agc-buy .buy-hero h1 {
+        font-size: 30px;
+    }
+    #agc-buy .buy-content,
+    #agc-buy .buy-process,
+    #agc-buy .buy-rates-widget {
+        padding-left: 24px;
+        padding-right: 24px;
+    }
+    #agc-buy .buy-content {
+        padding-top: 36px;
+        padding-bottom: 36px;
+    }
+    #agc-buy .buy-process {
+        padding-top: 36px;
+        padding-bottom: 36px;
+    }
+    #agc-buy .buy-rates-intro {
+        padding: 36px 24px 16px;
+    }
+    #agc-buy .buy-cta {
+        padding: 32px 24px;
+    }
+}
+@media (max-width: 640px) {
+    #agc-buy .buy-hero h1 {
+        font-size: 26px;
+    }
+    #agc-buy .buy-cta-btn,
+    #agc-buy .buy-cta-phone {
+        display: block;
+        width: 100%;
+        text-align: center;
+        margin: 0 0 12px;
+    }
+}
+
+/* ===== SIDE DRAWER (appointment form) ============================
+ *
+ * Rendered as siblings to #agc-buy so they sit at the page root level
+ * — position:fixed hoists them above all other content. `.buy-drawer`
+ * starts off-canvas (translateX(100%)) and slides in when the
+ * `.buy-drawer--open` class is added by agc-buy-rates.js.
+ */
+
+.buy-drawer-fab {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 2147483640;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 18px;
+    border-radius: 30px;
+    background: #ebc631;
+    color: #1d2327;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+}
+.buy-drawer-fab:hover {
+    background: #d4b12a;
+    transform: translateY(-1px);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+}
+.buy-drawer-fab-label {
+    font-weight: 700;
+}
+@media (max-width: 520px) {
+    .buy-drawer-fab-label {
+        display: none; /* icon-only on small phones */
+    }
+    .buy-drawer-fab {
+        padding: 12px;
+        border-radius: 50%;
+    }
+}
+
+.buy-drawer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 22, 34, 0.5);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 240ms ease;
+    z-index: 2147483641;
+}
+.buy-drawer-overlay.buy-drawer-overlay--open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.buy-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: min(480px, 100vw);
+    background: #fff;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.2);
+    transform: translateX(100%);
+    transition: transform 280ms cubic-bezier(0.2, 0.8, 0.3, 1);
+    z-index: 2147483642;
+    display: flex;
+    flex-direction: column;
+    font-family: 'Inter', system-ui, sans-serif;
+}
+.buy-drawer.buy-drawer--open {
+    transform: translateX(0);
+}
+
+.buy-drawer-header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid #eee9d7;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-shrink: 0;
+}
+.buy-drawer-header h2 {
+    font-size: 20px;
+    font-weight: 800;
+    color: #1d2327;
+    margin: 0 0 4px;
+    line-height: 1.2;
+}
+.buy-drawer-header p {
+    font-size: 14px;
+    color: #666;
+    margin: 0;
+}
+.buy-drawer-close {
+    background: transparent;
+    border: none;
+    color: #1d2327;
+    padding: 6px;
+    margin: -6px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.15s;
+    flex-shrink: 0;
+}
+.buy-drawer-close:hover {
+    background: #f5f1e3;
+}
+
+.buy-drawer-body {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+    /* Override some aggressive Gravity Forms wrappers that force 100vw. */
+}
+.buy-drawer-body .gform_wrapper,
+.buy-drawer-body .gform_wrapper form,
+.buy-drawer-body .gform_fields {
+    max-width: 100%;
+}
+
+/* Ensure body scroll lock when drawer is open (JS toggles class on body) */
+body.buy-drawer-locked {
+    overflow: hidden;
+}
+
+/* Preview-mode reminder: when a page editor is rendering the shortcode
+ * with no JS bound yet, keep the drawer visibly off-canvas (not popping
+ * up mid-edit). */
+.buy-drawer[aria-hidden='true'] {
+    transform: translateX(100%);
+}
+.buy-drawer[aria-hidden='false'] {
+    transform: translateX(0);
+}
