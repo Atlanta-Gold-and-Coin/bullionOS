@@ -21,11 +21,16 @@ const ALLOWED_PERIODS: Record<Period, string> = {
  *
  * Bucketing uses PG's `date_trunc(period, created_at AT TIME ZONE 'America/New_York')`
  * so the financial day matches the shop's wall clock. Each row carries three
- * signed totals:
+ * totals:
  *
- *   purchases  — buy  invoices from retail clients (walk-ins / in-office)
- *   sales      — sell invoices to retail clients  (walk-ins / in-office)
- *   wholesale  — any invoice against a wholesaler client
+ *   purchases  — ALL buy  invoices (retail + wholesale). The top-line "money
+ *                out the door" for the period.
+ *   sales      — ALL sell invoices (retail + wholesale). The top-line "money
+ *                in" for the period.
+ *   wholesale  — SUBSET: the portion of the above attributable to wholesaler
+ *                clients (buy + sell combined). Think of it as a filter view
+ *                of the same data, not a separate bucket — summing sales +
+ *                purchases + wholesale double-counts.
  *
  * Only invoices in status IN ('paid','shipped') count. Drafts and canceled
  * don't move money. Callers pass:
@@ -133,18 +138,25 @@ export class KpiController {
       )
       SELECT
         s.bucket_start,
+        -- Purchases = ALL buy invoices (retail + wholesale). Previously this
+        -- excluded wholesale, which hid ~the single largest weekly movement
+        -- for a shop that does 30-day-net wholesale buys alongside walk-ins.
         COALESCE(SUM(
           CASE
             WHEN e.manual_category = 'purchases' THEN e.total
-            WHEN e.type = 'buy' AND e.client_type = 'retail' THEN e.total
+            WHEN e.type = 'buy' THEN e.total
           END
         ), 0)::text AS purchases,
+        -- Sales = ALL sell invoices (retail + wholesale).
         COALESCE(SUM(
           CASE
             WHEN e.manual_category = 'sales' THEN e.total
-            WHEN e.type = 'sell' AND e.client_type = 'retail' THEN e.total
+            WHEN e.type = 'sell' THEN e.total
           END
         ), 0)::text AS sales,
+        -- Wholesale is a SUBSET of the above, not additive. Kept so the
+        -- dashboard can still answer "of the above, how much was wholesale?"
+        -- at a glance.
         COALESCE(SUM(
           CASE
             WHEN e.manual_category = 'wholesale' THEN e.total

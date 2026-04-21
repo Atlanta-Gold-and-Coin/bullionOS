@@ -140,7 +140,14 @@ export default function KpiPage() {
           </div>
         </div>
         <div className="mt-4 overflow-x-auto">
-          <BarChart buckets={data?.buckets ?? []} period={period} loading={isLoading} />
+          {/* Reverse so the most recent bucket sits at x=0 (leftmost).
+              Operators scan "what happened today" first and drill backward
+              into history; matches the reversed rollup table below. */}
+          <BarChart
+            buckets={(data?.buckets ?? []).slice().reverse()}
+            period={period}
+            loading={isLoading}
+          />
         </div>
       </section>
 
