@@ -148,6 +148,57 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       .catch(() => alert('Failed to open PDF'));
   }
 
+  /**
+   * Print-direct: fetch the PDF, drop it into a hidden iframe that lives
+   * on this same document, and call print() from inside. No download
+   * step, no new tab, no blocked popup. Works for drafts too — the PDF
+   * renderer has no status gate, so operators can print an in-progress
+   * ticket for a client to review.
+   */
+  function printPdf() {
+    const token = getAccessToken();
+    fetch(`/api/v1/admin/invoices/${id}/pdf`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error('fetch failed');
+        return r.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        // Remove any previous print frame from an earlier click so we
+        // don't leak DOM nodes if the operator prints several times.
+        const prior = document.getElementById('agc-print-frame');
+        if (prior) prior.remove();
+
+        const iframe = document.createElement('iframe');
+        iframe.id = 'agc-print-frame';
+        iframe.style.cssText =
+          'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+        iframe.src = url;
+        iframe.onload = () => {
+          // Small defer so the browser's PDF viewer finishes rendering
+          // before we poke the print dialog. Without this, Chrome
+          // occasionally prints a blank page on the first call.
+          setTimeout(() => {
+            try {
+              iframe.contentWindow?.focus();
+              iframe.contentWindow?.print();
+            } catch {
+              // Fallback if an embedded PDF can't accept print() — open
+              // in a new tab so the operator still has a path.
+              window.open(url, '_blank');
+            }
+          }, 250);
+        };
+        document.body.appendChild(iframe);
+        // Revoke the blob URL after a minute so the page doesn't hold
+        // memory for every print click through the session.
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      })
+      .catch(() => alert('Failed to print'));
+  }
+
   if (isLoading || !data) {
     return <div className="text-sm text-ink-400">Loading…</div>;
   }
@@ -218,6 +269,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 Mark paid
               </button>
             )}
+          <button
+            onClick={printPdf}
+            className="rounded-md border border-ink-200 px-3 py-1.5 text-sm hover:bg-ink-50"
+            title="Open the print dialog directly — works on drafts too"
+          >
+            Print
+          </button>
           <button
             onClick={openPdf}
             className="rounded-md border border-ink-200 px-3 py-1.5 text-sm hover:bg-ink-50"
