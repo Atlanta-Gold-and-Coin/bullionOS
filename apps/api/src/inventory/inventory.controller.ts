@@ -77,8 +77,12 @@ export class InventoryController {
    * toggle — that toggle is for the anonymous WP plugin audience.
    * Logged-in clients are entitled to see the full in-stock inventory.
    */
+  // Widened to admin/staff so operators can preview the client portal
+  // without logging in as a customer. The data is the same full in-stock
+  // list regardless of caller — there's no per-client personalization
+  // on this endpoint — so exposing it to admins is strictly additive.
   @Get('client/in-stock')
-  @Roles('client')
+  @Roles('client', 'admin', 'staff')
   clientInStock() {
     return this.service.inStock({ onlyWebsite: false });
   }

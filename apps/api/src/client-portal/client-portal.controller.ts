@@ -25,14 +25,33 @@ export class ClientPortalController {
     private readonly pdf: InvoicePdfService,
   ) {}
 
+  /**
+   * Read-only catalog feeds are widened to admin/staff so operators can
+   * preview the customer portal without needing a separate client
+   * account. The invoice endpoints below stay client-only because they
+   * resolve the caller's linked `clients.user_id` — admin users don't
+   * have a clients row, so those endpoints genuinely don't have data
+   * to return for them.
+   *
+   * Switched from Promise.all(products.map(...quote())) to quoteMany()
+   * so we do 1 DB sweep instead of 213 concurrent quote calls — the
+   * portal page load was spinning for several seconds before.
+   */
   @Get('prices')
+  @Roles('client', 'admin', 'staff')
   async prices() {
     const products = await this.products.list({ onlyActive: true, onlyWebsite: true });
     const spot = await this.metals.getSpot();
 
-    const items = await Promise.all(
-      products.map(async (p) => {
-        const q = await this.pricing.quote(p.id, 1);
+    const quotes = await this.pricing.quoteMany(
+      products.map((p) => ({ product_id: p.id, quantity: 1 })),
+    );
+    const quoteByProduct = new Map(quotes.map((q) => [q.product_id, q]));
+
+    const items = products
+      .map((p) => {
+        const q = quoteByProduct.get(p.id);
+        if (!q) return null;
         return {
           product_id: p.id,
           sku: p.sku,
@@ -40,13 +59,14 @@ export class ClientPortalController {
           metal: p.metal,
           buy_price: toDisplay(q.buy_unit_price, 2),
         };
-      }),
-    );
+      })
+      .filter(<T>(v: T | null): v is T => v !== null);
 
     return { items, as_of: spot.asOf };
   }
 
   @Get('spot')
+  @Roles('client', 'admin', 'staff')
   async spot() {
     const s = await this.metals.getSpot();
     return {
