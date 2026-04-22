@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api-client';
 import type { SheetRow } from '@/lib/sheet-types';
 import { rankProducts } from '@/lib/product-search';
@@ -53,6 +53,15 @@ export default function PriceSheetPage() {
     queryKey: ['admin', 'products', 'sheet'],
     queryFn: () => apiFetch<SheetRow[]>('/admin/products/sheet'),
     refetchInterval: 60_000,
+    // Keep the previous rows rendered during the 60s refetch so the
+    // table doesn't flash to "Loading…" on tab re-focus or a window
+    // blur/focus cycle. Without this, the poll would blank the UI
+    // mid-scroll.
+    placeholderData: keepPreviousData,
+    // Treat data fresh for just under the poll interval so hitting
+    // the page from elsewhere in the app hydrates instantly from the
+    // React Query cache instead of hitting the API again.
+    staleTime: 55_000,
   });
 
   // Empty search → rows stay in server sort_order. Active search →
@@ -321,14 +330,25 @@ function PriceRow({
         )}
       </td>
       <td className="bg-red-50/40 px-4 py-3 text-right">
-        <div className="font-mono font-semibold text-red-700">
-          {row.buy_price !== null
-            ? `$${Number(row.buy_price).toFixed(2)}`
-            : '—'}
-        </div>
-        {buyPct !== null && (
-          <div className="font-mono text-[11px] text-red-500/80">
-            {buyPct.toFixed(1)}% of spot
+        {/* % of spot is the operator's lead signal at the counter —
+            "we're at 96% of spot" communicates the ask faster than
+            the dollar figure. Dollar moves to the subtitle. */}
+        {buyPct !== null ? (
+          <>
+            <div className="font-mono font-semibold text-red-700">
+              {buyPct.toFixed(1)}% of spot
+            </div>
+            <div className="font-mono text-[11px] text-red-500/80">
+              {row.buy_price !== null
+                ? `$${Number(row.buy_price).toFixed(2)}`
+                : '—'}
+            </div>
+          </>
+        ) : (
+          <div className="font-mono font-semibold text-red-700">
+            {row.buy_price !== null
+              ? `$${Number(row.buy_price).toFixed(2)}`
+              : '—'}
           </div>
         )}
       </td>

@@ -65,6 +65,24 @@ export class AdminProductsController {
   ) {}
 
   /**
+   * Short-lived in-memory cache for the /sheet endpoint. Price Sheet,
+   * In-Stock Sheet, and Buy Sheet all hit the same payload on page
+   * load + 60s poll. Without this, three admins open on three pages =
+   * three full catalog × pricing recomputes every minute; with it,
+   * burst requests inside the TTL window return from a Map lookup.
+   *
+   * TTL is intentionally short (5s) — admin mutations call
+   * invalidateSheetCache() to clear it immediately, so the cache
+   * doesn't mask fresh edits.
+   */
+  private static sheetCache: { at: number; data: unknown } | null = null;
+  private static readonly SHEET_CACHE_TTL_MS = 5_000;
+
+  static invalidateSheetCache() {
+    AdminProductsController.sheetCache = null;
+  }
+
+  /**
    * CSV import — two-phase: preview first (shows create/update/error per row),
    * then commit if the operator approves. Admin only, file capped at 2 MB.
    */
@@ -115,6 +133,7 @@ export class AdminProductsController {
     // Loose validation — bad ids just become no-ops, the service still
     // returns 204. The UI always sends valid uuids.
     await this.products.reorder(body.order);
+    AdminProductsController.invalidateSheetCache();
   }
 
   /**
@@ -127,8 +146,20 @@ export class AdminProductsController {
    */
   @Get('sheet')
   async sheet() {
+    const now = Date.now();
+    if (
+      AdminProductsController.sheetCache &&
+      now - AdminProductsController.sheetCache.at <
+        AdminProductsController.SHEET_CACHE_TTL_MS
+    ) {
+      return AdminProductsController.sheetCache.data;
+    }
+
     const products = await this.products.list({ onlyActive: true });
-    if (products.length === 0) return [];
+    if (products.length === 0) {
+      AdminProductsController.sheetCache = { at: now, data: [] };
+      return [];
+    }
 
     const quotes = await this.pricing.quoteMany(
       products.map((p) => ({ product_id: p.id, quantity: 1 })),
@@ -153,7 +184,7 @@ export class AdminProductsController {
       .execute();
     const invByProduct = new Map(invRows.map((r) => [r.product_id, r]));
 
-    return products.map((p) => {
+    const result = products.map((p) => {
       const q = quoteById.get(p.id);
       const inv = invByProduct.get(p.id);
       const on_hand = Number(inv?.quantity_on_hand ?? 0);
@@ -183,6 +214,8 @@ export class AdminProductsController {
         location: inv?.location ?? 'main',
       };
     });
+    AdminProductsController.sheetCache = { at: now, data: result };
+    return result;
   }
 
   @Get(':id')
@@ -232,7 +265,7 @@ export class AdminProductsController {
     @Body() dto: UpsertProductPricingDto,
   ) {
     const product = await this.products.getById(id);
-    return this.pricingRules.upsert({
+    const result = await this.pricingRules.upsert({
       scope: 'product',
       product_id: product.id,
       buy_premium_type: dto.buy_premium_type,
@@ -240,6 +273,8 @@ export class AdminProductsController {
       sell_premium_type: dto.sell_premium_type,
       sell_premium_value: dto.sell_premium_value,
     });
+    AdminProductsController.invalidateSheetCache();
+    return result;
   }
 
   /** Drop any product-specific override, falling back to the metal default. */
@@ -256,20 +291,25 @@ export class AdminProductsController {
       .executeTakeFirst();
     if (!active) throw new BadRequestException('No override to clear');
     await this.pricingRules.deactivate(active.id);
+    AdminProductsController.invalidateSheetCache();
   }
 
   @Post()
   @HttpCode(201)
-  create(@Body() dto: CreateProductDto) {
-    return this.products.create(dto);
+  async create(@Body() dto: CreateProductDto) {
+    const result = await this.products.create(dto);
+    AdminProductsController.invalidateSheetCache();
+    return result;
   }
 
   @Patch(':id')
-  update(
+  async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateProductDto,
   ) {
-    return this.products.update(id, dto);
+    const result = await this.products.update(id, dto);
+    AdminProductsController.invalidateSheetCache();
+    return result;
   }
 
   /**
@@ -302,5 +342,6 @@ export class AdminProductsController {
     } else {
       await this.products.delete(id);
     }
+    AdminProductsController.invalidateSheetCache();
   }
 }
