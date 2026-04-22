@@ -60,9 +60,17 @@ const NAV_ITEMS: NavEntry[] = [
   { href: '/admin', label: 'Dashboard' },
   { href: '/admin/kpi', label: 'KPI' },
   { href: '/admin/calendar', label: 'Calendar' },
-  { href: '/admin/invoices', label: 'Invoices' },
-  { href: '/admin/invoices/new', label: 'New invoice' },
-  { href: '/admin/wholesale/reconciliation', label: 'Wholesale AR' },
+  // Invoices parent carries two sub-entries so the ways to act on
+  // invoices (create, collect) sit under one heading. The parent link
+  // still navigates to the invoice list; children handle create + AR.
+  {
+    href: '/admin/invoices',
+    label: 'Invoices',
+    children: [
+      { href: '/admin/invoices/new', label: 'New invoice' },
+      { href: '/admin/wholesale/reconciliation', label: 'Wholesale AR' },
+    ],
+  },
   {
     href: '/admin/clients',
     label: 'Clients',
@@ -72,10 +80,18 @@ const NAV_ITEMS: NavEntry[] = [
     ],
   },
   { href: '/admin/shipments', label: 'Shipments' },
-  { href: '/admin/pricesheet', label: 'Price Sheet' },
-  { href: '/admin/in-stock-sheet', label: 'In Stock Sheet' },
-  { href: '/admin/buy-sheet', label: 'What We Pay' },
-  { href: '/admin/products', label: 'Catalog' },
+  // Catalog parent groups the three pricing / stock views that all
+  // read the same sheet payload. Parent route is still the Catalog
+  // (drag-reorder surface); children are the printable sheets.
+  {
+    href: '/admin/products',
+    label: 'Catalog',
+    children: [
+      { href: '/admin/pricesheet', label: 'Price Sheet' },
+      { href: '/admin/in-stock-sheet', label: 'In Stock Sheet' },
+      { href: '/admin/buy-sheet', label: 'What We Pay' },
+    ],
+  },
   {
     href: '/admin/settings',
     label: 'Settings',
