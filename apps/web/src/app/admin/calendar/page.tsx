@@ -226,20 +226,58 @@ function EventRow({
  * are cached by react-query on the email as key, so re-renders don't
  * re-fetch.
  */
+/**
+ * Domains we treat as internal AGC staff — these attendees never
+ * become CRM clients via auto-resolve. Customer-facing domains (gmail,
+ * yahoo, outlook, proton, anything else) DO auto-create when the
+ * calendar loads, so admins don't have to click "+ add" for every
+ * externally-added event.
+ */
+const INTERNAL_DOMAINS = [
+  'atlantagoldandcoin.com',
+  'atlantagoldandcoinbuyers.com',
+  'agcdesk.com',
+];
+
+function isInternalEmail(email: string): boolean {
+  const at = email.lastIndexOf('@');
+  if (at < 0) return false;
+  const domain = email.slice(at + 1).toLowerCase();
+  return INTERNAL_DOMAINS.includes(domain);
+}
+
 function AttendeeChip({
   attendee,
 }: {
   attendee: { email: string; name: string | null; responseStatus: string | null };
 }) {
   const qc = useQueryClient();
+  // Auto-create clients for EXTERNAL attendees on page load. Internal
+  // AGC staff stay in dry-run (read-only lookup) so the company's own
+  // sales@ / hunter@ / staff@ addresses don't get turned into CRM
+  // client rows. This closes the gap where events added via Google
+  // Calendar / Gmail / Calendly weren't creating clients.
+  const shouldAutoCreate = !isInternalEmail(attendee.email);
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'client-lookup', attendee.email.toLowerCase()],
     queryFn: () =>
-      apiFetch<{ matched: boolean; client_id?: string }>(
+      apiFetch<{ matched: boolean; created?: boolean; client_id?: string }>(
         '/admin/calendar/resolve-attendee',
         {
           method: 'POST',
-          body: JSON.stringify({ email: attendee.email, dryRun: true }),
+          body: JSON.stringify(
+            shouldAutoCreate
+              ? {
+                  email: attendee.email,
+                  name: attendee.name ?? undefined,
+                  // Not a dry run — findOrCreateByContact actually
+                  // creates the client row if no match exists.
+                }
+              : {
+                  email: attendee.email,
+                  dryRun: true,
+                },
+          ),
         },
       ),
     // Client linkage doesn't change between page loads often; keep it
@@ -286,12 +324,20 @@ function AttendeeChip({
       </span>
     );
   }
-  if (data?.matched && data.client_id) {
+  // After auto-create the response has client_id + created:true +
+  // matched:false (matched = 'pre-existed'). Either way, if we got a
+  // client_id back the attendee is linked — render as a link, not
+  // a "+ add" chip.
+  if (data?.client_id) {
     return (
       <Link
         href={`/admin/clients/${data.client_id}`}
         className={`rounded-full px-2 py-0.5 hover:underline ${statusCls}`}
-        title="Linked to CRM client"
+        title={
+          data.created
+            ? 'New CRM client auto-created from this calendar attendee'
+            : 'Linked to CRM client'
+        }
       >
         {label} →
       </Link>
