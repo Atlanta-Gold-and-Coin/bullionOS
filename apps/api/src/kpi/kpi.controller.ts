@@ -68,6 +68,172 @@ export class KpiController {
     return this.invoices.listOutstandingWholesale();
   }
 
+  /**
+   * Per-wholesaler breakdown over time. Returns one series per
+   * wholesaler client, each with per-bucket amounts, so the KPI page
+   * can render a stacked-by-wholesaler chart distinct from the
+   * aggregate Wholesale bar on the existing timeline.
+   *
+   * Data sources unioned, matching the main rollup:
+   *   - live invoices: client_type='wholesaler' rows, status
+   *     IN ('paid','shipped'), sum i.total.
+   *   - historical_invoices: is_wholesale=true, sum h.amount.
+   *   - kpi_manual_entries: category='wholesale' + non-null client_id
+   *     (manual entries without a client are rolled into "(no client)"
+   *     so they still show up — surfacing the gap helps the
+   *     accountant clean up legacy data).
+   *
+   * Response shape (frontend-friendly):
+   *   {
+   *     period, bucket_starts: [Date, ...],
+   *     wholesalers: [{ client_id, client_name, totals: [amt, ...] }]
+   *   }
+   *
+   * The totals array is aligned index-wise to bucket_starts. Sorted by
+   * grand total desc so legend order = top-contributors-first.
+   */
+  @Get('wholesale-breakdown')
+  async wholesaleBreakdown(
+    @Query('period') periodRaw?: string,
+    @Query('buckets') bucketsRaw?: string,
+  ) {
+    const period: Period = (periodRaw && ALLOWED_PERIODS[periodRaw as Period]
+      ? (periodRaw as Period)
+      : 'month') as Period;
+    const bucketsDefault = { day: 30, week: 24, month: 12, quarter: 8, year: 5 }[period];
+    const buckets = Math.min(
+      240,
+      Math.max(1, Number(bucketsRaw ?? bucketsDefault)),
+    );
+
+    // Monthly+ zoom includes kpi_manual_entries; day/week skips them
+    // (see the main rollup for the same reasoning — month-granular
+    // rows would spike the first-of-month unfairly on a daily chart).
+    const includeManual = period === 'month' || period === 'quarter' || period === 'year';
+
+    const rows = await sql<{
+      bucket_start: Date;
+      client_id: string | null;
+      client_name: string | null;
+      total: string;
+    }>`
+      WITH series AS (
+        SELECT (generate_series(
+          date_trunc(${period}, (now() AT TIME ZONE 'America/New_York'))
+            - (${sql.raw(`interval '1 ${period}'`)} * (${buckets} - 1)),
+          date_trunc(${period}, (now() AT TIME ZONE 'America/New_York')),
+          ${sql.raw(`interval '1 ${period}'`)}
+        ))::date AS bucket_start
+      ),
+      eligible AS (
+        -- Live wholesale invoices
+        SELECT
+          date_trunc(${period}, (i.created_at AT TIME ZONE 'America/New_York'))::date AS bucket_start,
+          i.client_id,
+          COALESCE(
+            NULLIF(TRIM(COALESCE(cl.first_name,'') || ' ' || COALESCE(cl.last_name,'')), ''),
+            cl.company
+          ) AS client_name,
+          i.total::numeric AS total
+        FROM invoices i
+        INNER JOIN clients cl ON cl.id = i.client_id
+        WHERE i.status IN ('paid','shipped')
+          AND cl.client_type = 'wholesaler'
+          AND cl.exclude_from_reports = false
+
+        UNION ALL
+
+        -- Historical invoices tagged wholesale
+        SELECT
+          date_trunc(${period}, h.date)::date AS bucket_start,
+          h.client_id,
+          COALESCE(
+            NULLIF(TRIM(COALESCE(hcl.first_name,'') || ' ' || COALESCE(hcl.last_name,'')), ''),
+            hcl.company,
+            h.client_name
+          ) AS client_name,
+          h.amount::numeric AS total
+        FROM historical_invoices h
+        LEFT JOIN clients hcl ON hcl.id = h.client_id
+        WHERE h.is_wholesale = true
+
+        ${includeManual
+          ? sql`
+              UNION ALL
+              SELECT
+                date_trunc(${period}, m.bucket_month)::date AS bucket_start,
+                m.client_id,
+                COALESCE(
+                  NULLIF(TRIM(COALESCE(mcl.first_name,'') || ' ' || COALESCE(mcl.last_name,'')), ''),
+                  mcl.company
+                ) AS client_name,
+                m.amount::numeric AS total
+              FROM kpi_manual_entries m
+              LEFT JOIN clients mcl ON mcl.id = m.client_id
+              WHERE m.category = 'wholesale'
+            `
+          : sql``}
+      )
+      SELECT
+        s.bucket_start,
+        e.client_id,
+        e.client_name,
+        COALESCE(SUM(e.total), 0)::text AS total
+      FROM series s
+      LEFT JOIN eligible e ON e.bucket_start = s.bucket_start
+      GROUP BY s.bucket_start, e.client_id, e.client_name
+      ORDER BY s.bucket_start ASC, e.client_id NULLS LAST
+    `.execute(this.db);
+
+    // Pivot rows into { wholesaler → bucket → total }. `client_id=null`
+    // rows are rolled under a synthetic "(unassigned)" bucket so legacy
+    // historical entries without a CRM link still surface — the
+    // accountant can then go clean them up.
+    const bucketStarts = new Map<string, Date>();
+    const byClient = new Map<
+      string,
+      { client_id: string | null; client_name: string; perBucket: Map<string, number> }
+    >();
+    for (const r of rows.rows) {
+      const bucketKey = r.bucket_start.toISOString();
+      bucketStarts.set(bucketKey, r.bucket_start);
+      if (!r.client_id && Number(r.total) === 0) continue; // empty bucket rows
+      const key = r.client_id ?? '__unassigned__';
+      const name = r.client_name ?? (r.client_id ? 'Unnamed wholesaler' : '(unassigned)');
+      if (!byClient.has(key)) {
+        byClient.set(key, {
+          client_id: r.client_id,
+          client_name: name,
+          perBucket: new Map(),
+        });
+      }
+      const cur = byClient.get(key)!.perBucket.get(bucketKey) ?? 0;
+      byClient.get(key)!.perBucket.set(bucketKey, cur + Number(r.total));
+    }
+
+    // Emit buckets in chronological order and wholesalers in
+    // grand-total-desc so the legend reads top-contributor-first.
+    const orderedBuckets = [...bucketStarts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, d]) => d);
+    const wholesalers = [...byClient.values()]
+      .map((w) => ({
+        client_id: w.client_id,
+        client_name: w.client_name,
+        totals: orderedBuckets.map(
+          (d) => w.perBucket.get(d.toISOString()) ?? 0,
+        ),
+        grand_total: [...w.perBucket.values()].reduce((s, v) => s + v, 0),
+      }))
+      .sort((a, b) => b.grand_total - a.grand_total);
+
+    return {
+      period,
+      bucket_starts: orderedBuckets,
+      wholesalers,
+    };
+  }
+
   @Get()
   async rollup(
     @Query('period') periodRaw?: string,
