@@ -88,22 +88,26 @@ export class GremindersService {
       return { ok: false, message: 'API key is empty.' };
     }
 
-    // Step 1 — API key alone.
-    const keyOnly = await this.callUsers({ apiKey: creds.api_key });
+    // Step 1 — validate the API key alone against GET /webhooks.
+    // We can't use /users here because GReminders requires
+    // X-GReminders-Impersonation-ID on per-user endpoints; /webhooks
+    // is org-scoped and accepts a key on its own.
+    const keyOnly = await this.callGet('/webhooks', { apiKey: creds.api_key });
     if (!keyOnly.ok) {
       return {
         ok: false,
         message:
           `API key rejected by GReminders (HTTP ${keyOnly.status}). ` +
-          `Check the key under /admin/integrations → GReminders, or regenerate one in ` +
-          `GReminders → Account → API Keys.` +
+          `Regenerate a fresh key in GReminders → Account → API Keys and ` +
+          `paste it in /admin/integrations → GReminders.` +
           (keyOnly.body ? ` Raw response: ${keyOnly.body.slice(0, 200)}` : ''),
       };
     }
 
-    // Step 2 — only if an impersonation id is configured.
+    // Step 2 — only if an impersonation id is configured. Verifies
+    // the id maps to a real user this key can act as.
     if (creds.impersonation_id) {
-      const impersonated = await this.callUsers({
+      const impersonated = await this.callGet('/users', {
         apiKey: creds.api_key,
         impersonationId: creds.impersonation_id,
       });
@@ -112,38 +116,38 @@ export class GremindersService {
           ok: false,
           message:
             `API key is valid, but impersonation_id was rejected ` +
-            `(HTTP ${impersonated.status}). This usually means the user id ` +
-            `does NOT match a real GReminders account, or this API key doesn't ` +
-            `have permission to act as them. Find the right id in GReminders → ` +
-            `Account → Users → click yourself → copy the UUID from the URL. ` +
-            `It's NOT your email.` +
+            `(HTTP ${impersonated.status}). The user id does NOT match a real ` +
+            `GReminders account, or this API key doesn't have permission to ` +
+            `act as them. Find the right id in GReminders → Account → Users → ` +
+            `click yourself → copy the UUID from the URL (starts with "usr_" ` +
+            `or similar). It's NOT your email.` +
             (impersonated.body ? ` Raw: ${impersonated.body.slice(0, 200)}` : ''),
         };
       }
     }
 
     const parts = [
-      `Connected to GReminders (HTTP ${keyOnly.status}).`,
+      `Connected to GReminders. API key is valid.`,
       creds.impersonation_id
-        ? 'Impersonation id accepted.'
-        : 'Impersonation id NOT set — webhook ingest still works, but outbound calls on behalf of a user will fail until you add it.',
+        ? 'Impersonation id accepted — ready to sync bookings.'
+        : 'Impersonation id NOT set — inbound webhooks still work, but any outbound calls (future Option B) will fail until you add it.',
       creds.webhook_secret
         ? 'Webhook signing is enabled.'
-        : 'Webhook signing secret NOT set — inbound events are accepted unsigned (dev-only; set the secret before production traffic).',
+        : 'Webhook signing secret NOT set — inbound events accepted unsigned (set the secret before production traffic).',
     ];
     return { ok: true, message: parts.join(' ') };
   }
 
   /**
-   * Single point-hit against GET /users. Returns the HTTP status + a
-   * short body snippet on failure so testConnection can compose a
-   * useful operator-facing message. Swallows network errors into
-   * { ok: false, status: 0, body: '…' } for a uniform shape.
+   * Small wrapper around fetch() for GReminders GET endpoints. Returns
+   * a uniform `{ ok, status, body }` shape so testConnection can
+   * compose operator-facing messages without each call site doing its
+   * own try/catch. Network errors become `{ ok: false, status: 0 }`.
    */
-  private async callUsers(args: {
-    apiKey: string;
-    impersonationId?: string;
-  }): Promise<{ ok: boolean; status: number; body: string }> {
+  private async callGet(
+    path: string,
+    args: { apiKey: string; impersonationId?: string },
+  ): Promise<{ ok: boolean; status: number; body: string }> {
     const headers: Record<string, string> = {
       'X-GReminders-API-Key': args.apiKey,
       Accept: 'application/json',
@@ -152,7 +156,7 @@ export class GremindersService {
       headers['X-GReminders-Impersonation-ID'] = args.impersonationId;
     }
     try {
-      const res = await fetch(`${GremindersService.API_BASE}/users`, {
+      const res = await fetch(`${GremindersService.API_BASE}${path}`, {
         method: 'GET',
         headers,
       });
