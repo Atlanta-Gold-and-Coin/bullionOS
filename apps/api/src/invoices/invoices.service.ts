@@ -577,6 +577,14 @@ export class InvoicesService {
       // the column. See WH-002.
       patch.paid_by_user_id = actor.id;
       patch.payment_status = 'paid';
+      // Walk-in shortcut: draft → paid skips the finalized state
+      // entirely. Backfill finalized_at so the timeline still reads
+      // "finalized before paid" on the rare report that reads that
+      // column. Use the same `now()` as paid_at so the two are
+      // co-incident, signaling "both happened in the same click."
+      if (!current.finalized_at) {
+        patch.finalized_at = patch.paid_at;
+      }
     }
 
     // Inventory policy (driven entirely by status transition):
@@ -602,6 +610,7 @@ export class InvoicesService {
       | { kind: 'consume' }
       | { kind: 'release' }
       | { kind: 'reverse_consume' }
+      | { kind: 'direct_sale' }
       | null = this.classifyInventoryAction(current.type, current.status, status);
 
     const { updatedRow: updated, restockProductIds } = await this.db
@@ -678,6 +687,24 @@ export class InvoicesService {
                   reason: 'return',
                   invoice_id: id,
                   actor_user_id: actor.id,
+                });
+                break;
+              case 'direct_sale':
+                // Walk-in retail: draft → paid in one click, no prior
+                // reservation. Pull straight off the shelf (delta=-qty,
+                // reserved_delta=0). Mirrors the end-state of a normal
+                // draft → finalized → paid chain with one fewer
+                // movement row. Oversell-guarded same as reserve —
+                // admin can force through with the Override box on
+                // the wizard or detail page.
+                result = await this.inventory.applyMovement(trx, {
+                  product_id: line.product_id,
+                  delta: -line.quantity,
+                  reserved_delta: 0,
+                  reason: 'sale',
+                  invoice_id: id,
+                  actor_user_id: actor.id,
+                  force: forceOversell,
                 });
                 break;
             }
@@ -1185,7 +1212,9 @@ export class InvoicesService {
     type: InvoiceType,
     from: InvoiceStatus,
     to: InvoiceStatus,
-  ): { kind: 'purchase' | 'reserve' | 'consume' | 'release' | 'reverse_consume' } | null {
+  ):
+    | { kind: 'purchase' | 'reserve' | 'consume' | 'release' | 'reverse_consume' | 'direct_sale' }
+    | null {
     if (type === 'buy') {
       if (to === 'paid' && from !== 'paid') return { kind: 'purchase' };
       return null;
@@ -1198,6 +1227,15 @@ export class InvoicesService {
     if (from === 'finalized' && (to === 'paid' || to === 'shipped')) {
       return { kind: 'consume' };
     }
+    // Walk-in retail shortcut: draft → paid in one click. No reservation
+    // was ever created, so we can't "consume" one — we apply a direct
+    // sale movement (delta=-qty, reserved_delta=0). Same net inventory
+    // effect as draft → finalized → paid, one fewer round trip.
+    // Introduced Apr 2026 when the operator asked to remove the explicit
+    // Finalize button for client invoices. Wholesale typically still
+    // goes through finalized (AR stays open until payment lands), but
+    // the backend allows the shortcut for either type.
+    if (from === 'draft' && to === 'paid') return { kind: 'direct_sale' };
     // Cancel paths. Paid→canceled means we already deducted, so we must
     // restore stock (return flow). Finalized→canceled releases the reservation
     // without any stock movement. Shipped→canceled is disallowed at the
@@ -1210,7 +1248,12 @@ export class InvoicesService {
   private canTransition(from: InvoiceStatus, to: InvoiceStatus): boolean {
     if (from === to) return true;
     const allowed: Record<InvoiceStatus, InvoiceStatus[]> = {
-      draft: ['finalized', 'canceled'],
+      // `paid` in this list lets retail walk-ins skip Finalize — the
+      // UI hides the Finalize button for retail clients and sends
+      // status=paid directly. Wholesale still goes draft → finalized
+      // → paid via the detail-page dropdown to preserve open-AR
+      // semantics.
+      draft: ['finalized', 'paid', 'canceled'],
       finalized: ['paid', 'shipped', 'canceled'],
       paid: ['shipped', 'canceled'], // canceling a paid sell releases reservation
       // shipped → paid enables the wholesale "ship first, get paid days

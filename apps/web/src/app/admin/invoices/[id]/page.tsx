@@ -54,22 +54,62 @@ interface InvoiceDetail {
   line_items: LineItem[];
 }
 
-const NEXT_STATUSES: Record<string, Array<{ value: string; label: string }>> = {
-  draft: [
-    { value: 'finalized', label: 'Finalize' },
-    { value: 'canceled', label: 'Cancel' },
-  ],
-  finalized: [
-    { value: 'paid', label: 'Mark paid' },
-    { value: 'shipped', label: 'Mark shipped' },
-    { value: 'canceled', label: 'Cancel' },
-  ],
-  paid: [{ value: 'shipped', label: 'Mark shipped' }],
-  // shipped → paid supports the wholesale "ship first, pay later"
-  // workflow. Invoice stays on Wholesale AR until this fires.
-  shipped: [{ value: 'paid', label: 'Mark paid' }],
-  canceled: [],
-};
+/**
+ * Next-step options for the status-transition buttons on the detail
+ * page. Returns the list of valid transitions from the current status,
+ * tuned by invoice type + client_type.
+ *
+ * Apr 2026 operator spec: "make client invoices be marked finalized
+ * simply when Mark Paid is clicked — essentially removing the
+ * Finalize button." So:
+ *   - Retail sell draft    → just [Mark Paid, Cancel] (backend
+ *                             routes draft → paid as a direct_sale).
+ *   - Wholesale sell draft → stays [Finalize, Cancel] so AR behavior
+ *                             (open-invoice ledger until payment
+ *                             lands) is preserved.
+ *   - Buy drafts           → [Mark Paid, Cancel] in every case —
+ *                             a buy never reserves, so Finalize
+ *                             never added value.
+ * Other states unchanged.
+ */
+function nextStatusesFor(invoice: {
+  status: string;
+  type: 'buy' | 'sell';
+  client_type?: 'retail' | 'wholesaler';
+}): Array<{ value: string; label: string }> {
+  switch (invoice.status) {
+    case 'draft': {
+      // Retail sell + any buy → skip Finalize, go straight to Paid.
+      // Wholesale sell keeps the explicit Finalize step.
+      const skipFinalize =
+        invoice.type === 'buy' || invoice.client_type !== 'wholesaler';
+      return skipFinalize
+        ? [
+            { value: 'paid', label: 'Mark paid' },
+            { value: 'canceled', label: 'Cancel' },
+          ]
+        : [
+            { value: 'finalized', label: 'Finalize' },
+            { value: 'canceled', label: 'Cancel' },
+          ];
+    }
+    case 'finalized':
+      return [
+        { value: 'paid', label: 'Mark paid' },
+        { value: 'shipped', label: 'Mark shipped' },
+        { value: 'canceled', label: 'Cancel' },
+      ];
+    case 'paid':
+      return [{ value: 'shipped', label: 'Mark shipped' }];
+    // shipped → paid supports the wholesale "ship first, pay later"
+    // workflow. Invoice stays on Wholesale AR until this fires.
+    case 'shipped':
+      return [{ value: 'paid', label: 'Mark paid' }];
+    case 'canceled':
+    default:
+      return [];
+  }
+}
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -231,7 +271,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     return <div className="text-sm text-ink-400">Loading…</div>;
   }
 
-  const options = NEXT_STATUSES[data.status] ?? [];
+  const options = nextStatusesFor({
+    status: data.status,
+    type: data.type,
+    client_type: data.client_type,
+  });
 
   return (
     <PageTint side={data.type === 'buy' ? 'buy' : 'sell'}>
