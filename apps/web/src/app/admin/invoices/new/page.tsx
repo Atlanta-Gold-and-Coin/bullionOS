@@ -668,12 +668,38 @@ export default function NewInvoicePage() {
 
         {/* 3 · Line items */}
         <section className="mt-4 rounded-xl border border-ink-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <SectionHeader step={3} title="Line items" />
-            <span className="hidden text-xs text-ink-400 md:inline">
-              New line auto-adds once the previous one is filled.
-            </span>
+            {/* Live running-total badge — updates as each line's qty /
+                unit / product changes. Same figure the sticky bottom
+                rail shows, surfaced here so operators see the total
+                grow while they're typing without having to glance
+                down. Side-tinted (buy=red, sell=green) so the badge
+                also reinforces the direction they're in. */}
+            <div
+              className={`inline-flex items-baseline gap-2 rounded-full px-3 py-1.5 text-sm font-semibold ${
+                type === 'buy'
+                  ? 'bg-buy-600/10 text-buy-700'
+                  : 'bg-sell-600/10 text-sell-700'
+              }`}
+              aria-live="polite"
+            >
+              <span className="text-[10px] font-semibold uppercase tracking-wider opacity-70">
+                Running total
+              </span>
+              <span className="font-mono tabular-nums">
+                {money(runningTotal)}
+              </span>
+              {filledLines.length > 0 && (
+                <span className="text-[11px] font-normal opacity-70">
+                  · {filledLines.length} line{filledLines.length === 1 ? '' : 's'}
+                </span>
+              )}
+            </div>
           </div>
+          <p className="mt-2 hidden text-xs text-ink-400 md:block">
+            New line auto-adds once the previous one is filled.
+          </p>
 
           {/* Mobile scroll wrapper (MOB-001). On narrow viewports the wide
               line row would otherwise clip at the edges.
@@ -1071,9 +1097,22 @@ function LineRow({
         </div>
         <input
           type="number"
-          min={1}
-          value={line.quantity}
-          onChange={(e) => onChange({ quantity: Math.max(1, Number(e.target.value)) })}
+          min={0}
+          // Allow the input to be fully cleared — operators type fresh
+          // numbers without backspacing the default "1" first. Empty
+          // state stores quantity=0 (displayed as empty); submit-time
+          // validate() already blocks qty <= 0, so an unfilled line
+          // can't accidentally ship. Typing any real number re-populates.
+          value={line.quantity === 0 ? '' : line.quantity}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === '') {
+              onChange({ quantity: 0 });
+              return;
+            }
+            const n = Number(raw);
+            onChange({ quantity: Number.isFinite(n) && n >= 0 ? n : 0 });
+          }}
           className="input col-span-2 font-mono"
           aria-label="Quantity"
         />
