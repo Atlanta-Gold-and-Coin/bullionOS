@@ -174,7 +174,7 @@ export class KpiController {
           END
         ), 0)::text AS purchases,
         -- Sales = RETAIL sell invoices only. Wholesaler sell invoices get
-        -- accounted under the `wholesale` column below, so Sales + Wholesale
+        -- accounted under the wholesale column below, so Sales + Wholesale
         -- is disjoint (no double-count on the stacked-bar chart).
         -- manual_category='sales' entries are tagged retail in the CTE
         -- (see manualCte above), so the first arm is automatically retail-
