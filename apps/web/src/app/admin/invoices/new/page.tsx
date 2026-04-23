@@ -795,7 +795,7 @@ export default function NewInvoicePage() {
 
           <p className="mt-1 text-xs text-ink-400">
             Leave blank to use &ldquo;now&rdquo; when you click Create. Backdate for
-            walk-ins being written up later.
+            retail tickets being written up later.
           </p>
           <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
             <input

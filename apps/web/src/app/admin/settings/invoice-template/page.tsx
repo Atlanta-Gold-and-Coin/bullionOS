@@ -124,7 +124,7 @@ export default function InvoiceTemplatePage() {
           value={footer}
           onChange={(e) => setFooter(e.target.value)}
           maxLength={2000}
-          placeholder="e.g. Store hours: Mon–Fri 10a–6p. Walk-ins welcome. Appointments recommended for buys over $10,000."
+          placeholder="e.g. Store hours: Mon–Fri 10a–6p. Appointments recommended for buys over $10,000."
           className="input mt-3 h-28 w-full font-mono text-xs"
         />
         <div className="mt-1 text-right text-[11px] text-ink-400">

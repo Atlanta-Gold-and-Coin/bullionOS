@@ -275,7 +275,7 @@ export default function ClientsListPage() {
                       </span>
                     ) : (
                       <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-medium text-ink-500">
-                        walk-in
+                        retail
                       </span>
                     )}
                   </td>

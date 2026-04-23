@@ -510,7 +510,7 @@ function DraftRow({
             type="text"
             value={draft.clientName}
             onChange={(e) => onPatch({ clientName: e.target.value })}
-            placeholder="Walk-in, Jane Smith…"
+            placeholder="Retail, Jane Smith…"
             className="input mt-1"
             maxLength={200}
           />

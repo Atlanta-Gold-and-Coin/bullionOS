@@ -302,7 +302,7 @@ export default function ClientDetailPage({
               </>
             ) : (
               <>
-                <p className="text-ink-400">Walk-in client.</p>
+                <p className="text-ink-400">Retail client.</p>
                 <button
                   onClick={enablePortal}
                   disabled={busy || !client.email}

@@ -13,7 +13,7 @@ export default function NewClientPage() {
     <div className="mx-auto max-w-2xl">
       <h1 className="text-2xl font-semibold">New client</h1>
       <p className="mt-1 text-sm text-ink-400">
-        Create a walk-in record. Portal access can be enabled later from the client's detail page.
+        Create a retail client record. Portal access can be enabled later from the client's detail page.
       </p>
 
       <div className="mt-6">
