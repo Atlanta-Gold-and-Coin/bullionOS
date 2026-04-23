@@ -87,53 +87,73 @@ export class GremindersService {
     if (!creds.api_key) {
       return { ok: false, message: 'API key is empty.' };
     }
-
-    // Step 1 — validate the API key alone against GET /webhooks.
-    // We can't use /users here because GReminders requires
-    // X-GReminders-Impersonation-ID on per-user endpoints; /webhooks
-    // is org-scoped and accepts a key on its own.
-    const keyOnly = await this.callGet('/webhooks', { apiKey: creds.api_key });
-    if (!keyOnly.ok) {
+    // GReminders' API requires X-GReminders-Impersonation-ID on
+    // EVERY endpoint (both /users and /webhooks error 403 without it).
+    // There's no way to validate the key in isolation, so we simply
+    // can't run a meaningful test without a user id.
+    if (!creds.impersonation_id) {
       return {
         ok: false,
         message:
-          `API key rejected by GReminders (HTTP ${keyOnly.status}). ` +
-          `Regenerate a fresh key in GReminders → Account → API Keys and ` +
-          `paste it in /admin/integrations → GReminders.` +
-          (keyOnly.body ? ` Raw response: ${keyOnly.body.slice(0, 200)}` : ''),
+          'Impersonation User ID is required before we can test — ' +
+          'GReminders requires the X-GReminders-Impersonation-ID header on ' +
+          'every API call, so there\'s no way to validate the key on its own. ' +
+          'Fill in the user id (GReminders → Account → Users → click yourself → ' +
+          'copy the UUID from the URL; NOT your email) and retry.',
       };
     }
 
-    // Step 2 — only if an impersonation id is configured. Verifies
-    // the id maps to a real user this key can act as.
-    if (creds.impersonation_id) {
-      const impersonated = await this.callGet('/users', {
-        apiKey: creds.api_key,
-        impersonationId: creds.impersonation_id,
-      });
-      if (!impersonated.ok) {
-        return {
-          ok: false,
-          message:
-            `API key is valid, but impersonation_id was rejected ` +
-            `(HTTP ${impersonated.status}). The user id does NOT match a real ` +
-            `GReminders account, or this API key doesn't have permission to ` +
-            `act as them. Find the right id in GReminders → Account → Users → ` +
-            `click yourself → copy the UUID from the URL (starts with "usr_" ` +
-            `or similar). It's NOT your email.` +
-            (impersonated.body ? ` Raw: ${impersonated.body.slice(0, 200)}` : ''),
-        };
+    const res = await this.callGet('/users', {
+      apiKey: creds.api_key,
+      impersonationId: creds.impersonation_id,
+    });
+    if (!res.ok) {
+      // Parse the specific failure shape. GReminders messages we've
+      // seen in the wild:
+      //   "User is Invalid"                          → bad user id
+      //   "X-GReminders-Impersonation-ID header …"    → (shouldn't hit this now)
+      //   generic 401/403                             → bad API key OR key
+      //                                                 lacks impersonation
+      //                                                 scope on this account
+      const body = res.body || '';
+      const isBadUser = /user is invalid/i.test(body);
+      const isMissingHeader = /impersonation-id header is missing/i.test(body);
+      let guidance: string;
+      if (isBadUser) {
+        guidance =
+          'The Impersonation User ID does NOT match a real GReminders ' +
+          'account, or this API key isn\'t allowed to act as them. Find the ' +
+          'right id in GReminders → Account → Users → click yourself → copy ' +
+          'the UUID from the URL. It\'s NOT your email.';
+      } else if (isMissingHeader) {
+        guidance =
+          'GReminders says the impersonation header is missing even though ' +
+          'we sent one. Re-save the integration form and retry; if this ' +
+          'persists, contact support with request id + body.';
+      } else if (res.status === 401) {
+        guidance =
+          'API key is invalid or expired. Regenerate in GReminders → ' +
+          'Account → API Keys and re-paste it here.';
+      } else {
+        guidance =
+          'Either the API key is wrong OR it doesn\'t have permission to ' +
+          'impersonate this user. Double-check both: regenerate the key, ' +
+          'and verify the user id is a UUID (not your email).';
       }
+      return {
+        ok: false,
+        message:
+          `GReminders rejected the request (HTTP ${res.status}). ${guidance}` +
+          (body ? ` Raw: ${body.slice(0, 200)}` : ''),
+      };
     }
 
     const parts = [
-      `Connected to GReminders. API key is valid.`,
-      creds.impersonation_id
-        ? 'Impersonation id accepted — ready to sync bookings.'
-        : 'Impersonation id NOT set — inbound webhooks still work, but any outbound calls (future Option B) will fail until you add it.',
+      'Connected to GReminders. API key + impersonation id both valid.',
       creds.webhook_secret
         ? 'Webhook signing is enabled.'
-        : 'Webhook signing secret NOT set — inbound events accepted unsigned (set the secret before production traffic).',
+        : 'Webhook signing secret NOT set — inbound events accepted unsigned ' +
+          '(set the secret before production traffic).',
     ];
     return { ok: true, message: parts.join(' ') };
   }
@@ -172,17 +192,30 @@ export class GremindersService {
   }
 
   /**
-   * Verify the X-Greminders-Signature header. Returns true if signing
-   * is disabled (no secret configured) — we log a warning so the
-   * operator knows production is accepting unsigned events. Any
-   * attempt with a bad signature returns false.
+   * Verify the X-Greminders-Signature header using GReminders' actual
+   * signing scheme (confirmed by their docs Apr 2026):
    *
-   * GReminders' exact signing scheme isn't fully spelled out in their
-   * public docs. Their support confirms it's HMAC-SHA256 of the raw
-   * body with the shared secret, hex-encoded. We use timingSafeEqual
-   * to avoid timing-based secret leakage.
+   *   signature = HMAC-SHA256(
+   *     <x-greminders-request-timestamp>:<raw body>,
+   *     webhook_secret
+   *   )
+   *
+   * ...compared to the `x-greminders-signature` header, hex-encoded.
+   * The timestamp in the signed string protects against replays —
+   * even a correctly-signed body can't be re-sent with a fresh
+   * timestamp without re-signing, which requires the secret.
+   *
+   * Returns true if signing is DISABLED (no secret configured) so a
+   * dev box without the secret can still accept webhooks. In
+   * production operators should always set the secret; we log a
+   * warning when a webhook is accepted unsigned so it shows up in
+   * Railway logs.
    */
-  async verifySignature(rawBody: Buffer, headerSig: string | undefined): Promise<boolean> {
+  async verifySignature(
+    rawBody: Buffer,
+    headerSig: string | undefined,
+    headerTimestamp: string | undefined,
+  ): Promise<boolean> {
     const creds = await this.integrations.getCredentials('greminders', {
       respectEnabled: false,
     });
@@ -192,9 +225,17 @@ export class GremindersService {
       );
       return true;
     }
-    if (!headerSig) return false;
+    if (!headerSig || !headerTimestamp) return false;
+    // Sign `<timestamp>:<body>`. Prepending the timestamp with a
+    // colon separator is standard webhook anti-replay shape (Stripe
+    // uses the same pattern).
+    const signingString = Buffer.concat([
+      Buffer.from(headerTimestamp, 'utf8'),
+      Buffer.from(':', 'utf8'),
+      rawBody,
+    ]);
     const expected = createHmac('sha256', creds.webhook_secret)
-      .update(rawBody)
+      .update(signingString)
       .digest('hex');
     const a = Buffer.from(expected, 'utf8');
     const b = Buffer.from(headerSig, 'utf8');

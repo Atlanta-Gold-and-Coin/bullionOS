@@ -42,8 +42,12 @@ export class GremindersWebhookController {
       (req as Request & { rawBody?: Buffer }).rawBody
       ?? Buffer.from(JSON.stringify(req.body ?? {}));
     const sig = headerVal(req, 'x-greminders-signature');
+    const ts = headerVal(req, 'x-greminders-request-timestamp');
 
-    const signatureOk = await this.greminders.verifySignature(rawBody, sig);
+    // Signature format: HMAC-SHA256(`<timestamp>:<body>`, webhook_secret).
+    // The timestamp header is required — the signing string embeds it to
+    // prevent replays of captured-but-unmodified webhooks.
+    const signatureOk = await this.greminders.verifySignature(rawBody, sig, ts);
     if (!signatureOk) {
       throw new BadRequestException('Invalid GReminders webhook signature');
     }
