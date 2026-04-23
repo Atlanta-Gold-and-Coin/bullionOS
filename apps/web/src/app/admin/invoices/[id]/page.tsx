@@ -242,28 +242,66 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </Link>
       </div>
 
-      <header className="flex flex-col items-start justify-between gap-3 md:flex-row md:flex-wrap">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="font-mono text-2xl font-semibold">{data.invoice_number}</h1>
-            {data.client_type === 'wholesaler' && (
-              <span className="rounded-full bg-gold-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gold-600">
-                Wholesale
+      {/* Hero card (Apr 2026 polish). Previously this was a plain flex
+          row; operators were asking for something that reads like an
+          invoice "cover sheet" rather than a page title. The card now
+          carries a side-specific accent rail (buy-600 / sell-600), a
+          large invoice number + type badge, and a small metadata strip.
+          Action cluster sits to the right on md+, wraps below on mobile. */}
+      <section className="relative mb-2 overflow-hidden rounded-xl border border-ink-200 bg-white shadow-sm">
+        {/* Accent rail — buy/sell color */}
+        <div
+          aria-hidden
+          className={`absolute inset-y-0 left-0 w-1 ${
+            data.type === 'buy' ? 'bg-buy-600' : 'bg-sell-600'
+          }`}
+        />
+        <header className="flex flex-col gap-4 p-5 md:flex-row md:items-start md:justify-between md:p-6">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                  data.type === 'buy'
+                    ? 'bg-buy-600/10 text-buy-700'
+                    : 'bg-sell-600/10 text-sell-700'
+                }`}
+              >
+                {data.type === 'buy' ? 'Buy ticket' : 'Invoice'}
               </span>
-            )}
-          </div>
-          <p className="mt-1 text-sm text-ink-400">
-            {data.type.toUpperCase()} · {data.client_name}
-            {data.client_company &&
-              !data.client_name.includes(data.client_company) && (
-                <span className="text-ink-500"> · {data.client_company}</span>
+              {data.client_type === 'wholesaler' && (
+                <span className="rounded-full bg-gold-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-gold-600">
+                  Wholesale
+                </span>
               )}
-            {data.client_email ? ` · ${data.client_email}` : ''}
-          </p>
-          <p className="mt-0.5 font-mono text-xs text-ink-400">
-            {formatLocalDateTime(data.created_at)}
-          </p>
-        </div>
+            </div>
+            <h1 className="mt-1 font-mono text-3xl font-semibold tracking-tight text-ink-900">
+              {data.invoice_number}
+            </h1>
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-600">
+              <span className="font-medium text-ink-800">{data.client_name}</span>
+              {data.client_company &&
+                !data.client_name.includes(data.client_company) && (
+                  <>
+                    <span className="text-ink-300">·</span>
+                    <span>{data.client_company}</span>
+                  </>
+                )}
+              {data.client_email && (
+                <>
+                  <span className="text-ink-300">·</span>
+                  <a
+                    href={`mailto:${data.client_email}`}
+                    className="hover:text-ink-900 hover:underline"
+                  >
+                    {data.client_email}
+                  </a>
+                </>
+              )}
+            </div>
+            <p className="mt-0.5 font-mono text-xs text-ink-400">
+              {formatLocalDateTime(data.created_at)}
+            </p>
+          </div>
         {/* Apr 2026 polish: header action cluster is broken into three
             visual groups so the 6–9 buttons that can appear here stop
             looking like a single undifferentiated row.
@@ -377,6 +415,37 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </header>
 
+      {/* Metrics strip — at-a-glance summary inside the hero card so
+          operators don't have to scan line items to learn the total,
+          item count, or whether payment is booked. Lives inside the
+          same card to read as "invoice summary", not a separate
+          widget. */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-ink-100 px-5 py-4 md:grid-cols-4 md:px-6">
+        <MetricCell
+          label="Total"
+          value={`$${Number(data.total).toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}`}
+          prominent
+        />
+        <MetricCell label="Items" value={String(data.line_items.length)} />
+        <MetricCell
+          label="Status"
+          value={String(data.status).replace('_', ' ')}
+          mono={false}
+          capitalize
+        />
+        <MetricCell
+          label={data.paid_at ? 'Paid' : 'Unpaid'}
+          value={
+            data.paid_at ? formatLocalDateTime(data.paid_at) : '—'
+          }
+          mono={!!data.paid_at}
+        />
+      </div>
+      </section>
+
       {/* Oversell override — admin-only, sell invoices only, and only while
           there's still a stock-moving transition available. Consciously
           placed outside the button row so it reads as a modifier, not a
@@ -401,9 +470,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           </div>
         )}
 
-      <section className="mt-8 overflow-hidden rounded-xl border border-ink-200 bg-white">
+      {/* Line items table. Apr 2026 polish: zebra striping on even rows
+          so the eye can track long lists; sticky-ish header row inside
+          the card; tabular-nums on all money columns so decimals line
+          up; subtle tint (buy → red, sell → green) on the header row
+          matching the hero accent. */}
+      <section className="mt-6 overflow-hidden rounded-xl border border-ink-200 bg-white shadow-sm">
         <table className="w-full text-sm">
-          <thead className="bg-ink-50 text-left text-xs uppercase tracking-wide text-ink-400">
+          <thead
+            className={`text-left text-[11px] font-semibold uppercase tracking-wider ${
+              data.type === 'buy'
+                ? 'bg-buy-600/5 text-buy-700'
+                : 'bg-sell-600/5 text-sell-700'
+            }`}
+          >
             <tr>
               <th className="px-4 py-3">Item</th>
               <th className="px-4 py-3 text-right">Qty</th>
@@ -414,29 +494,38 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </tr>
           </thead>
           <tbody>
-            {data.line_items.map((l) => (
-              <tr key={l.id} className="border-t border-ink-200">
+            {data.line_items.map((l, idx) => (
+              <tr
+                key={l.id}
+                className={`border-t border-ink-100 ${
+                  idx % 2 === 1 ? 'bg-ink-50/50' : ''
+                }`}
+              >
                 <td className="px-4 py-3">
-                  {l.product_name_snapshot}
+                  <span className="font-medium text-ink-900">
+                    {l.product_name_snapshot}
+                  </span>
                   {l.is_overridden && (
                     <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
                       override
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-right font-mono">{l.quantity}</td>
-                <td className="px-4 py-3 text-right font-mono text-ink-600">
+                <td className="px-4 py-3 text-right font-mono tabular-nums">
+                  {l.quantity}
+                </td>
+                <td className="px-4 py-3 text-right font-mono tabular-nums text-ink-500">
                   ${Number(l.spot_price_per_oz).toFixed(2)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono text-ink-600">
+                <td className="px-4 py-3 text-right font-mono tabular-nums text-ink-500">
                   {l.premium_type === 'percent'
                     ? `${Number(l.premium_value).toFixed(2)}%`
                     : `$${Number(l.premium_value).toFixed(2)}/oz`}
                 </td>
-                <td className="px-4 py-3 text-right font-mono">
+                <td className="px-4 py-3 text-right font-mono tabular-nums">
                   ${Number(l.unit_price).toFixed(2)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono">
+                <td className="px-4 py-3 text-right font-mono font-semibold tabular-nums text-ink-900">
                   ${Number(l.line_total).toFixed(2)}
                 </td>
               </tr>
@@ -445,12 +534,40 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </table>
       </section>
 
-      <section className="mt-6 ml-auto max-w-sm space-y-1 text-sm">
-        <TotalRow label="Subtotal" value={data.subtotal} />
-        {Number(data.tax) > 0 && <TotalRow label="Tax" value={data.tax} />}
-        {Number(data.shipping) > 0 && <TotalRow label="Shipping" value={data.shipping} />}
-        <div className="border-t border-ink-200 pt-1">
-          <TotalRow label="Total" value={data.total} bold />
+      {/* Totals card — right-aligned on md+, full width on phone. The
+          TOTAL row gets a subtle side-colored background so it reads
+          as the terminal figure without needing a big border rule. */}
+      <section className="mt-4 md:ml-auto md:max-w-sm">
+        <div className="overflow-hidden rounded-xl border border-ink-200 bg-white shadow-sm">
+          <div className="space-y-1 px-4 py-3 text-sm">
+            <TotalRow label="Subtotal" value={data.subtotal} />
+            {Number(data.tax) > 0 && <TotalRow label="Tax" value={data.tax} />}
+            {Number(data.shipping) > 0 && (
+              <TotalRow label="Shipping" value={data.shipping} />
+            )}
+          </div>
+          <div
+            className={`flex items-baseline justify-between border-t border-ink-200 px-4 py-3 ${
+              data.type === 'buy'
+                ? 'bg-buy-600/5'
+                : 'bg-sell-600/5'
+            }`}
+          >
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">
+              Total
+            </span>
+            <span
+              className={`font-mono text-xl font-semibold tabular-nums ${
+                data.type === 'buy' ? 'text-buy-700' : 'text-sell-700'
+              }`}
+            >
+              $
+              {Number(data.total).toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </span>
+          </div>
         </div>
       </section>
 
@@ -644,6 +761,42 @@ function TotalRow({ label, value, bold }: { label: string; value: string; bold?:
       <span className="font-mono">
         ${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </span>
+    </div>
+  );
+}
+
+/**
+ * Small summary cell used in the hero card's metrics strip. Four sit in
+ * a row on md+, collapsing to a 2-column grid on phone. `prominent`
+ * bumps the value to ~2xl for the Total cell; `capitalize` is only
+ * meaningful on text values like the status word; everything else
+ * defaults to a tabular-nums mono figure so number columns line up.
+ */
+function MetricCell({
+  label,
+  value,
+  prominent = false,
+  mono = true,
+  capitalize = false,
+}: {
+  label: string;
+  value: string;
+  prominent?: boolean;
+  mono?: boolean;
+  capitalize?: boolean;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-ink-400">
+        {label}
+      </div>
+      <div
+        className={`mt-0.5 ${
+          prominent ? 'text-2xl font-semibold text-ink-900' : 'text-base text-ink-700'
+        } ${mono ? 'font-mono tabular-nums' : ''} ${capitalize ? 'capitalize' : ''}`}
+      >
+        {value}
+      </div>
     </div>
   );
 }
