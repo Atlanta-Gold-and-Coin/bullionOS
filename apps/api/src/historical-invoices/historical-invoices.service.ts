@@ -103,6 +103,13 @@ export class HistoricalInvoicesService {
         // Prefer the linked client's name if present, else fall back
         // to the free-text client_name the accountant typed in. Keeps
         // display consistent whether a row was linked or orphaned.
+        //
+        // Empty-string fallbacks use sql.lit (inline literal) rather
+        // than eb.val (parameterized) — Postgres can't type the nested
+        // coalesce/concat/nullif combination when the zero-length
+        // strings arrive as untyped parameters and throws
+        // `could not determine data type of parameter $N` (42P18).
+        // Inline literals skip the prepared-statement type dance.
         eb
           .case()
           .when('h.client_id', 'is not', null)
@@ -111,12 +118,12 @@ export class HistoricalInvoicesService {
               eb.fn('nullif', [
                 eb.fn('trim', [
                   eb.fn('concat', [
-                    eb.fn.coalesce(eb.ref('c.first_name'), eb.val('')),
-                    eb.val(' '),
-                    eb.fn.coalesce(eb.ref('c.last_name'), eb.val('')),
+                    eb.fn.coalesce(eb.ref('c.first_name'), sql.lit('')),
+                    sql.lit(' '),
+                    eb.fn.coalesce(eb.ref('c.last_name'), sql.lit('')),
                   ]),
                 ]),
-                eb.val(''),
+                sql.lit(''),
               ]),
               eb.ref('c.company'),
               eb.ref('h.client_name'),
