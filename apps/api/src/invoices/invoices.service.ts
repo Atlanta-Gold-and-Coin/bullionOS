@@ -1122,6 +1122,79 @@ export class InvoicesService {
       .orderBy('i.created_at', 'asc')
       .execute();
 
+    // 2026-onward policy: historical_invoices rows dated 2026+ with a
+    // wholesale flag and a linked client are treated as outstanding
+    // AP alongside real invoices. Operators started using the
+    // historical-invoices form to book fresh 2026 vendor POs
+    // (Dillon Gage etc.) and expected those to surface on this page.
+    // Pre-2026 historicals stay archive-only. No paid_at on the
+    // historical_invoices table yet, so deleting the historical row
+    // is how an operator clears it from this list for now.
+    const histRows = await this.db
+      .selectFrom('historical_invoices as h')
+      .innerJoin('clients as c', 'c.id', 'h.client_id')
+      .select((eb) => [
+        'h.id',
+        eb.fn
+          .coalesce(
+            'h.reference',
+            sql<string>`'HIST-' || substring(h.id::text, 1, 8)`,
+          )
+          .as('invoice_number'),
+        sql<string>`h.amount::text`.as('total'),
+        sql<Date>`h.date::timestamptz`.as('created_at'),
+        'h.type',
+        'h.client_id',
+        'c.email as client_email',
+        sql<string>`coalesce(nullif(trim(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')), ''), c.company, '(unnamed)')`.as(
+          'client_name',
+        ),
+      ])
+      .where('c.client_type', '=', 'wholesaler')
+      .where('c.exclude_from_reports', '=', false)
+      .where('h.is_wholesale', '=', true)
+      .where(sql<boolean>`h.date >= '2026-01-01'::date`)
+      .orderBy('c.last_name')
+      .orderBy('h.date', 'asc')
+      .execute();
+
+    // Normalize both result sets to a shared shape. `client_id` comes
+    // back nullable from historical_invoices even though the innerJoin
+    // guarantees non-null in practice — filter + cast keeps TS happy.
+    const combined: Array<{
+      id: string;
+      invoice_number: string;
+      total: string;
+      created_at: Date;
+      type: InvoiceType;
+      client_id: string;
+      client_email: string | null;
+      client_name: string;
+    }> = [
+      ...rows.map((r) => ({
+        id: r.id,
+        invoice_number: r.invoice_number,
+        total: r.total as unknown as string,
+        created_at: r.created_at as Date,
+        type: r.type as InvoiceType,
+        client_id: r.client_id,
+        client_email: r.client_email,
+        client_name: r.client_name,
+      })),
+      ...histRows
+        .filter((r) => r.client_id !== null)
+        .map((r) => ({
+          id: r.id,
+          invoice_number: r.invoice_number as string,
+          total: r.total,
+          created_at: r.created_at,
+          type: r.type as InvoiceType,
+          client_id: r.client_id as string,
+          client_email: r.client_email,
+          client_name: r.client_name,
+        })),
+    ];
+
     const grouped = new Map<
       string,
       {
@@ -1141,7 +1214,7 @@ export class InvoicesService {
     >();
 
     let total = d(0);
-    for (const r of rows) {
+    for (const r of combined) {
       const existing = grouped.get(r.client_id) ?? {
         client_id: r.client_id,
         client_name: r.client_name,

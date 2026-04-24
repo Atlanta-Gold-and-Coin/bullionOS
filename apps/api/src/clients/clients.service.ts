@@ -550,11 +550,22 @@ export class ClientsService {
     });
   }
 
-  /** Read the full history timeline for the client-detail page. */
+  /**
+   * Read the full history timeline for the client-detail page.
+   *
+   * 2026-onward policy (Apr 2026): historical_invoices entries dated
+   * 2026-01-01 or later are treated as operationally live — they show
+   * up in client timelines AND wholesale AP the same way a real
+   * invoices row would. Pre-2026 historical entries stay archive-only
+   * (KPI rollup feed, not surfaced to client/AP pages). The
+   * rationale: operators were booking fresh 2026 vendor POs via the
+   * historical-invoices form (no line items / inventory side-effects
+   * needed) and then losing visibility in downstream views.
+   */
   async getTimeline(clientId: string) {
     await this.getById(clientId); // 404 if missing
 
-    const [invoices, quotes, requests, shipments] = await Promise.all([
+    const [liveInvoices, histInvoices, quotes, requests, shipments] = await Promise.all([
       this.db
         .selectFrom('invoices')
         .select([
@@ -567,6 +578,30 @@ export class ClientsService {
         ])
         .where('client_id', '=', clientId)
         .orderBy('created_at', 'desc')
+        .limit(100)
+        .execute(),
+      // 2026+ historical invoices for this client, mapped into the
+      // same shape the timeline UI already renders. `status` is
+      // synthesized as 'finalized' because historical rows don't
+      // carry a lifecycle column; `invoice_number` uses reference
+      // when available, otherwise a short synthetic tag so the row
+      // still looks like an invoice in the list.
+      this.db
+        .selectFrom('historical_invoices')
+        .select((eb) => [
+          'id',
+          eb.fn.coalesce(
+            'reference',
+            sql<string>`'HIST-' || substring(id::text, 1, 8)`,
+          ).as('invoice_number'),
+          'type',
+          sql<string>`'finalized'`.as('status'),
+          sql<string>`amount::text`.as('total'),
+          sql<Date>`date::timestamptz`.as('created_at'),
+        ])
+        .where('client_id', '=', clientId)
+        .where(sql<boolean>`date >= '2026-01-01'::date`)
+        .orderBy('date', 'desc')
         .limit(100)
         .execute(),
       this.db
@@ -612,6 +647,15 @@ export class ClientsService {
         .limit(100)
         .execute(),
     ]);
+
+    // Merge live + 2026+ historical invoices into one list, newest
+    // first. The UI doesn't care which table each row came from —
+    // both render the same way.
+    const invoices = [...liveInvoices, ...histInvoices].sort((a, b) => {
+      const ad = new Date(a.created_at as unknown as string | Date).getTime();
+      const bd = new Date(b.created_at as unknown as string | Date).getTime();
+      return bd - ad;
+    });
 
     return { invoices, quotes, requests, shipments };
   }
