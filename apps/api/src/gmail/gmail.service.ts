@@ -21,8 +21,14 @@ export interface PollResult {
     from: string | null;
     subject: string | null;
     internal_date: string | null;
-    outcome: 'ingested' | 'skipped-no-pdf' | 'skipped-parse-fail' | 'error';
+    outcome:
+      | 'ingested'
+      | 'skipped-no-url'
+      | 'skipped-fetch-fail'
+      | 'skipped-parse-fail'
+      | 'error';
     as_of_date?: string | null;
+    pdf_url?: string | null;
     error?: string | null;
   }>;
   /** Reason polling was a no-op (not configured, not enabled, etc.). */
@@ -219,15 +225,16 @@ export class GmailService {
 
     const gmail = this.gmail(creds);
 
-    // Build the Gmail search query. `has:attachment filename:pdf` narrows
-    // to messages with PDFs; `-label:<processed>` excludes ones we've
-    // already ingested; `newer_than:2d` keeps the working set tiny so
-    // polling is cheap even after months of accumulated messages.
+    // Build the Gmail search query. We no longer require `has:attachment`
+    // because RARCOA's daily email links to the PDF rather than
+    // attaching it — the body has a "Download" button pointing at
+    // rarcoawholesale.com/dyn/goldsheet-<id>.pdf. `subject_filter` is
+    // a free-form Gmail-query fragment (not forced to `subject:` prefix)
+    // so typing `"goldsheet"` matches the body token RARCOA uses in
+    // every send.
     const q = [
       creds.sender_filter.trim(),
-      'has:attachment',
-      'filename:pdf',
-      creds.subject_filter.trim() ? `subject:${creds.subject_filter.trim()}` : '',
+      creds.subject_filter.trim(),
       `-label:${creds.processed_label}`,
       'newer_than:2d',
     ]
@@ -268,43 +275,47 @@ export class GmailService {
           ? new Date(Number(msg.data.internalDate)).toISOString()
           : null;
 
-        const pdfPart = this.findPdfAttachment(msg.data.payload);
-        if (!pdfPart || !pdfPart.body?.attachmentId) {
+        // RARCOA's email body is HTML with a link (Download button) to
+        // the actual PDF hosted on rarcoawholesale.com. Walk the MIME
+        // tree to collect the HTML + plaintext bodies, then scan for
+        // the PDF URL.
+        const bodyText = this.extractBodyText(msg.data.payload);
+        const pdfUrl = this.findPdfUrl(bodyText);
+        if (!pdfUrl) {
           details.push({
             message_id: m.id,
             from,
             subject,
             internal_date: internalDate,
-            outcome: 'skipped-no-pdf',
+            outcome: 'skipped-no-url',
+            error: 'No PDF link found in message body',
           });
           continue;
         }
 
-        const attach = await gmail.users.messages.attachments.get({
-          userId: 'me',
-          messageId: m.id,
-          id: pdfPart.body.attachmentId,
-        });
-        const rawData = attach.data.data;
-        if (!rawData) {
+        let pdfBuffer: Buffer;
+        try {
+          pdfBuffer = await this.fetchPdf(pdfUrl);
+        } catch (err) {
           details.push({
             message_id: m.id,
             from,
             subject,
             internal_date: internalDate,
-            outcome: 'skipped-no-pdf',
-            error: 'Attachment body was empty',
+            outcome: 'skipped-fetch-fail',
+            pdf_url: pdfUrl,
+            error: (err as Error).message.slice(0, 500),
           });
+          // Don't label — maybe the URL TTL expired or the host is
+          // down. A future poll will retry.
           continue;
         }
-        // Gmail returns base64url — swap to standard base64 for Node's Buffer.
-        const pdfBuffer = Buffer.from(rawData, 'base64url');
 
         let snap: RarcoaSnapshot;
         try {
           snap = await this.rarcoa.ingestPdf({
             pdfBuffer,
-            filename: pdfPart.filename ?? null,
+            filename: this.filenameFromUrl(pdfUrl),
             ingestedByUserId: null,
           });
         } catch (err) {
@@ -314,6 +325,7 @@ export class GmailService {
             subject,
             internal_date: internalDate,
             outcome: 'skipped-parse-fail',
+            pdf_url: pdfUrl,
             error: (err as Error).message.slice(0, 500),
           });
           // Don't label — let a future poll pick it up once parsing is fixed.
@@ -339,14 +351,17 @@ export class GmailService {
           internal_date: internalDate,
           outcome: 'ingested',
           as_of_date: snap.as_of_date,
+          pdf_url: pdfUrl,
         });
         ingested++;
 
         // Broadcast to admins + staff. Keep the body tight — most
-        // operators only need the date and cell count.
+        // operators only need the date and cell count. Include
+        // as_of_time so multi-sheet-per-day pings disambiguate.
+        const timeSuffix = snap.as_of_time ? ` ${snap.as_of_time}` : '';
         await this.notifications.notifyRoles(['admin', 'staff'], {
           type: 'rarcoa.auto_ingest',
-          title: `RARCOA sheet auto-ingested · ${snap.as_of_date}`,
+          title: `RARCOA sheet auto-ingested · ${snap.as_of_date}${timeSuffix}`,
           body: `${snap.cells.length} price rows parsed from the daily email. Basis gold ${
             snap.basis_gold !== null ? '$' + snap.basis_gold.toFixed(2) : 'n/a'
           }.`,
@@ -382,29 +397,116 @@ export class GmailService {
   }
 
   /**
-   * Walk the MIME tree looking for a PDF attachment. Daily RARCOA
-   * emails carry the PDF as the only attachment, but in general
-   * multipart payloads can be arbitrarily deep (multipart/mixed with
-   * a multipart/alternative body + multipart/related inline images +
-   * the real attachment), so we recurse.
+   * Walk the MIME tree and concatenate every text/* part's decoded
+   * body. HTML gets priority (RARCOA's download button lives in an
+   * <a href>) but we include text/plain too as a fallback in case the
+   * HTML body is stripped or the link is only present in plaintext.
+   *
+   * Gmail encodes part bodies in base64url. For recursive multiparts
+   * the actual text lives at the leaf parts, not the parent.
    */
-  private findPdfAttachment(
+  private extractBodyText(
     part: gmail_v1.Schema$MessagePart | undefined,
-  ): gmail_v1.Schema$MessagePart | null {
-    if (!part) return null;
-    const filename = part.filename ?? '';
+  ): string {
+    if (!part) return '';
     const mime = part.mimeType ?? '';
-    if (
-      (mime === 'application/pdf' || filename.toLowerCase().endsWith('.pdf')) &&
-      part.body?.attachmentId
-    ) {
-      return part;
+    let buf = '';
+    // Leaf-node text part: decode it.
+    if (mime.startsWith('text/') && part.body?.data) {
+      try {
+        buf += Buffer.from(part.body.data, 'base64url').toString('utf8');
+      } catch {
+        /* ignore decode errors; other parts may still have usable text */
+      }
     }
+    // Recurse into children regardless — multipart wrappers can
+    // contain both a leaf text and nested attachments.
     for (const child of part.parts ?? []) {
-      const hit = this.findPdfAttachment(child);
-      if (hit) return hit;
+      buf += '\n' + this.extractBodyText(child);
     }
-    return null;
+    return buf;
+  }
+
+  /**
+   * Scan an email body (HTML + plaintext concat) for a PDF URL.
+   * Preference order:
+   *   1. URLs on rarcoawholesale.com (the known RARCOA PDF host)
+   *   2. Any other URL whose path ends in .pdf (with optional query)
+   *   3. Null if nothing matches
+   *
+   * Conservative about what we accept — we only fetch URLs that
+   * plausibly lead to a PDF. Query strings are kept (Mailchimp
+   * campaign params are harmless but stripping them could break
+   * servers that require them).
+   */
+  private findPdfUrl(body: string): string | null {
+    if (!body) return null;
+    // Normalize HTML-encoded ampersands so Mailchimp-style URLs
+    // (?utm_foo&amp;utm_bar=...) parse as the real query string.
+    const normalized = body.replace(/&amp;/gi, '&');
+    // Match any http/https URL whose path contains ".pdf" (optionally
+    // followed by ? or # for query/fragment). Conservative charset
+    // excludes whitespace, quotes, angle brackets, and HTML-escape
+    // delimiters so we don't swallow surrounding markup.
+    const re = /https?:\/\/[^\s"'<>)]+\.pdf(?:[?#][^\s"'<>)]*)?/gi;
+    const matches = Array.from(normalized.matchAll(re)).map((m) => m[0]);
+    if (matches.length === 0) return null;
+    const rarcoaHit = matches.find((u) =>
+      /rarcoawholesale\.com/i.test(u),
+    );
+    return rarcoaHit ?? matches[0];
+  }
+
+  /**
+   * Fetch a PDF URL server-side. Uses Node 20's native fetch with a
+   * 30s abort timeout so a hung host can't wedge the cron. Follows
+   * redirects (Mailchimp tracker links bounce through click.* before
+   * hitting the real host). Verifies the response's content-type
+   * contains "pdf" before handing the buffer back — guards against
+   * a server returning an HTML login page with 200 OK.
+   */
+  private async fetchPdf(url: string): Promise<Buffer> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    try {
+      const res = await fetch(url, {
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          // Some hosts reject requests without a User-Agent; mimic a
+          // generic browser so Mailchimp/Cloudflare edges treat us
+          // like an ordinary PDF download.
+          'User-Agent': 'AGC-Desk/1.0 (+https://agcdesk.com)',
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      }
+      const contentType = res.headers.get('content-type') ?? '';
+      if (!/pdf/i.test(contentType)) {
+        // Peek at the first chunk to include in the error message —
+        // helps diagnose "got HTML login page" scenarios.
+        const preview = (await res.text()).slice(0, 120);
+        throw new Error(
+          `Expected a PDF, got ${contentType || 'unknown'}: ${preview}`,
+        );
+      }
+      const array = await res.arrayBuffer();
+      return Buffer.from(array);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /** Derive a display filename from the URL's path, for provenance. */
+  private filenameFromUrl(url: string): string | null {
+    try {
+      const u = new URL(url);
+      const last = u.pathname.split('/').filter(Boolean).pop() ?? null;
+      return last;
+    } catch {
+      return null;
+    }
   }
 
   /**

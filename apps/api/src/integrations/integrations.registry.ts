@@ -141,13 +141,16 @@ const gmailCreds = z.object({
   mailbox_email: z.string().email().default('sales@atlantagoldandcoinbuyers.com'),
   // Populated by the OAuth callback after the one-time user consent.
   refresh_token: z.string().max(1000).default(''),
-  // Gmail search operator for the sender. RARCOA sends from a few
-  // different addresses depending on list vs individual send, so a
-  // domain-wide `from:` covers all of them.
-  sender_filter: z.string().min(3).max(200).default('from:rarcoa.com'),
-  // Subject substring to further filter. RARCOA's daily email subject
-  // is "RARCOA Goldsheet MM/DD/YY" — "Goldsheet" is the stable token.
-  subject_filter: z.string().max(200).default('Goldsheet'),
+  // Gmail search operator for the sender. The RARCOA daily sheet
+  // comes from sales@rarcoa.com specifically — `from:rarcoa.com`
+  // (domain-wide) also works but is broader than we need.
+  sender_filter: z.string().min(3).max(200).default('from:sales@rarcoa.com'),
+  // Free-form additional Gmail filter appended to the search. We don't
+  // force a `subject:` prefix — the literal "goldsheet" token lives
+  // in the body of RARCOA's emails, not the subject line, so a bare
+  // quoted word matches any field. Users can still type
+  // `subject:Goldsheet` explicitly if they want to tighten.
+  subject_filter: z.string().max(200).default('"goldsheet"'),
   // Label applied to processed messages so they're excluded from the
   // next poll. Gmail creates nested labels (RARCOA/Processed) as
   // needed — no pre-setup required.

@@ -86,8 +86,14 @@ interface PollResult {
     from: string | null;
     subject: string | null;
     internal_date: string | null;
-    outcome: 'ingested' | 'skipped-no-pdf' | 'skipped-parse-fail' | 'error';
+    outcome:
+      | 'ingested'
+      | 'skipped-no-url'
+      | 'skipped-fetch-fail'
+      | 'skipped-parse-fail'
+      | 'error';
     as_of_date?: string | null;
+    pdf_url?: string | null;
     error?: string | null;
   }>;
   skipped_reason?: string;
@@ -97,7 +103,10 @@ export default function RarcoaPage() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  // Selection is by sheet id, not date — RARCOA publishes multiple
+  // sheets per day (morning + midday + afternoon), each with its own
+  // id. `null` means "latest", same UX as before.
+  const [selectedSheetId, setSelectedSheetId] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   // Free-text filter applied across section label + product name. Lets the
@@ -110,13 +119,13 @@ export default function RarcoaPage() {
     queryFn: () => apiFetch<SheetRow[]>('/admin/rarcoa'),
   });
 
-  const queryKey = ['admin', 'rarcoa', 'snapshot', selectedDate ?? 'latest'];
+  const queryKey = ['admin', 'rarcoa', 'snapshot', selectedSheetId ?? 'latest'];
   const { data: snapshot, isLoading } = useQuery<Snapshot>({
     queryKey,
     queryFn: () =>
       apiFetch<Snapshot>(
-        selectedDate
-          ? `/admin/rarcoa/by-date?date=${encodeURIComponent(selectedDate)}`
+        selectedSheetId
+          ? `/admin/rarcoa/by-id/${encodeURIComponent(selectedSheetId)}`
           : '/admin/rarcoa/latest',
       ),
   });
@@ -132,10 +141,12 @@ export default function RarcoaPage() {
     },
     onSuccess: (snap) => {
       setFlash(
-        `Ingested ${snap.cells.length} price rows for ${snap.as_of_date}.`,
+        `Ingested ${snap.cells.length} price rows for ${snap.as_of_date}${
+          snap.as_of_time ? ' ' + snap.as_of_time : ''
+        }.`,
       );
       setErr(null);
-      setSelectedDate(null); // jump back to "latest" view
+      setSelectedSheetId(null); // jump back to "latest" view
       qc.invalidateQueries({ queryKey: ['admin', 'rarcoa'] });
     },
     onError: (e) => {
@@ -147,7 +158,12 @@ export default function RarcoaPage() {
   const deleteMut = useMutation<void, ApiError, string>({
     mutationFn: (id: string) =>
       apiFetch(`/admin/rarcoa/${id}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'rarcoa'] }),
+    onSuccess: () => {
+      // Drop the selection — pointing at a deleted sheet would return
+      // an empty snapshot and confuse the operator.
+      setSelectedSheetId(null);
+      qc.invalidateQueries({ queryKey: ['admin', 'rarcoa'] });
+    },
   });
 
   // Gmail auto-ingest status + manual poll. Pulled alongside the rarcoa
@@ -280,11 +296,11 @@ export default function RarcoaPage() {
             />
             {history.length > 1 && (
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                <span className="text-ink-500">Day:</span>
+                <span className="text-ink-500">History:</span>
                 <button
-                  onClick={() => setSelectedDate(null)}
+                  onClick={() => setSelectedSheetId(null)}
                   className={`rounded-md border px-2 py-1 ${
-                    selectedDate === null
+                    selectedSheetId === null
                       ? 'border-ink-900 bg-ink-900 text-white'
                       : 'border-ink-200 text-ink-600 hover:text-ink-900'
                   }`}
@@ -294,9 +310,9 @@ export default function RarcoaPage() {
                 {history.slice(0, 10).map((h) => (
                   <button
                     key={h.id}
-                    onClick={() => setSelectedDate(h.as_of_date)}
+                    onClick={() => setSelectedSheetId(h.id)}
                     className={`rounded-md border px-2 py-1 ${
-                      selectedDate === h.as_of_date
+                      selectedSheetId === h.id
                         ? 'border-ink-900 bg-ink-900 text-white'
                         : 'border-ink-200 text-ink-600 hover:text-ink-900'
                     }`}
@@ -305,18 +321,30 @@ export default function RarcoaPage() {
                     }`}
                   >
                     {formatDate(h.as_of_date)}
+                    {h.as_of_time && (
+                      <span className="ml-1 text-[10px] opacity-70">
+                        {h.as_of_time}
+                      </span>
+                    )}
                   </button>
                 ))}
-                {isAdmin && selectedDate && (
+                {isAdmin && selectedSheetId && (
                   <button
                     onClick={() => {
-                      const row = history.find((h) => h.as_of_date === selectedDate);
-                      if (row && confirm(`Delete the RARCOA sheet for ${formatDate(row.as_of_date)}?`))
+                      const row = history.find((h) => h.id === selectedSheetId);
+                      if (
+                        row &&
+                        confirm(
+                          `Delete the RARCOA sheet for ${formatDate(row.as_of_date)}${
+                            row.as_of_time ? ' ' + row.as_of_time : ''
+                          }?`,
+                        )
+                      )
                         deleteMut.mutate(row.id);
                     }}
                     className="rounded-md border border-red-200 px-2 py-1 text-red-700 hover:bg-red-50"
                   >
-                    Delete this day
+                    Delete this sheet
                   </button>
                 )}
               </div>
@@ -1054,8 +1082,10 @@ function OutcomeBadge({ outcome }: { outcome: PollResult['details'][number]['out
     switch (outcome) {
       case 'ingested':
         return { label: 'ingested', cls: 'bg-green-100 text-green-700' };
-      case 'skipped-no-pdf':
-        return { label: 'no pdf', cls: 'bg-ink-100 text-ink-500' };
+      case 'skipped-no-url':
+        return { label: 'no link', cls: 'bg-ink-100 text-ink-500' };
+      case 'skipped-fetch-fail':
+        return { label: 'fetch failed', cls: 'bg-amber-100 text-amber-700' };
       case 'skipped-parse-fail':
         return { label: 'parse failed', cls: 'bg-amber-100 text-amber-700' };
       case 'error':

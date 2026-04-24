@@ -143,12 +143,12 @@ const FIELDS: Record<
     {
       name: 'sender_filter',
       label: 'Sender filter (Gmail query)',
-      placeholder: 'from:rarcoa.com',
+      placeholder: 'from:sales@rarcoa.com',
     },
     {
       name: 'subject_filter',
-      label: 'Subject contains',
-      placeholder: 'Goldsheet',
+      label: 'Extra Gmail filter (free-form — body or subject)',
+      placeholder: '"goldsheet"',
     },
     {
       name: 'processed_label',

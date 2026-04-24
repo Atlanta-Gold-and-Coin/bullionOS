@@ -163,17 +163,23 @@ export class RarcoaService {
           raw_text: meta.rawText,
           ingested_by_user_id: meta.ingestedByUserId,
         })
+        // Multi-sheet-per-day support: the conflict target now includes
+        // as_of_time so morning + midday + afternoon RARCOA publications
+        // each land as distinct rows. A re-upload of the identical
+        // (date, time) still UPSERTs (refreshes metadata + wipes price
+        // rows) so idempotency holds within a single publication.
         .onConflict((oc) =>
-          oc.constraint('supplier_price_sheets_supplier_date_uq').doUpdateSet({
-            as_of_time: parsed.as_of_time,
-            basis_gold:
-              parsed.basis_gold !== null ? toDbString(parsed.basis_gold) : null,
-            source_ref: meta.sourceRef,
-            source_filename: meta.filename,
-            raw_text: meta.rawText,
-            ingested_by_user_id: meta.ingestedByUserId,
-            ingested_at: new Date(),
-          }),
+          oc
+            .constraint('supplier_price_sheets_supplier_date_time_uq')
+            .doUpdateSet({
+              basis_gold:
+                parsed.basis_gold !== null ? toDbString(parsed.basis_gold) : null,
+              source_ref: meta.sourceRef,
+              source_filename: meta.filename,
+              raw_text: meta.rawText,
+              ingested_by_user_id: meta.ingestedByUserId,
+              ingested_at: new Date(),
+            }),
         )
         .returning(['id'])
         .executeTakeFirstOrThrow();
@@ -208,47 +214,91 @@ export class RarcoaService {
     });
 
     this.logger.log(
-      `RARCOA: ingested ${parsed.cells.length} cells for ${parsed.as_of_date} (sheet ${sheet.id})`,
+      `RARCOA: ingested ${parsed.cells.length} cells for ${parsed.as_of_date} ${parsed.as_of_time ?? ''} (sheet ${sheet.id})`,
     );
 
-    const snapshot = await this.getByDate(parsed.as_of_date);
+    // Fetch by the ID we just inserted — fetching by (supplier, date)
+    // alone would race with any other same-day sheet that happens to
+    // be newer (e.g. this upload is the morning snapshot, afternoon
+    // already in the DB).
+    const snapshot = await this.getBySheetId(sheet.id);
     if (!snapshot) {
-      // Should be impossible after a successful persist, but guard
-      // anyway so the caller sees a clear error rather than silent
-      // null.
       throw new Error('Post-ingest snapshot read failed.');
     }
     return snapshot;
   }
 
-  /** Most recent RARCOA sheet across all dates. Returns null when none. */
-  async getLatest(): Promise<RarcoaSnapshot | null> {
-    const row = await this.db
+  /**
+   * Load a specific sheet by id. Used by the admin UI when the
+   * operator picks a specific publication from the history picker
+   * (multiple sheets per day coexist now, so date alone isn't a
+   * unique key).
+   */
+  async getBySheetId(id: string): Promise<RarcoaSnapshot | null> {
+    const sheet = await this.db
       .selectFrom('supplier_price_sheets')
-      .select(['id', 'as_of_date'])
+      .selectAll()
+      .where('id', '=', id)
       .where('supplier', '=', RarcoaService.SUPPLIER)
-      .orderBy('as_of_date', 'desc')
-      .limit(1)
       .executeTakeFirst();
-    if (!row) return null;
-    return this.getByDate(row.as_of_date as unknown as string);
+    if (!sheet) return null;
+    return this.hydrateSnapshot(sheet);
   }
 
   /**
-   * Fetch the snapshot for a specific date (YYYY-MM-DD). Enriches
-   * each cell with AGC markdown-computed prices (clean, spots,
-   * toned where applicable). Returns null when no sheet exists for
-   * that date.
+   * Most recent RARCOA sheet across all dates + times. Returns null
+   * when none. Sort key: date desc, then time desc — so the afternoon
+   * publication beats the morning one from the same day.
+   */
+  async getLatest(): Promise<RarcoaSnapshot | null> {
+    const row = await this.db
+      .selectFrom('supplier_price_sheets')
+      .select('id')
+      .where('supplier', '=', RarcoaService.SUPPLIER)
+      .orderBy('as_of_date', 'desc')
+      .orderBy('as_of_time', sql`desc nulls last`)
+      .orderBy('ingested_at', 'desc')
+      .limit(1)
+      .executeTakeFirst();
+    if (!row) return null;
+    return this.getBySheetId(row.id);
+  }
+
+  /**
+   * Fetch the latest snapshot for a specific date (YYYY-MM-DD). When
+   * multiple sheets exist for a date (morning + afternoon), returns
+   * the one with the later time. Admin UI uses getBySheetId for
+   * precise multi-sheet-per-day navigation; this endpoint stays for
+   * URL shortcuts like /admin/rarcoa/by-date?date=2026-04-24.
    */
   async getByDate(date: string): Promise<RarcoaSnapshot | null> {
     const sheet = await this.db
       .selectFrom('supplier_price_sheets')
-      .selectAll()
+      .select('id')
       .where('supplier', '=', RarcoaService.SUPPLIER)
       .where(sql<boolean>`as_of_date = ${date}::date`)
+      .orderBy('as_of_time', sql`desc nulls last`)
+      .orderBy('ingested_at', 'desc')
+      .limit(1)
       .executeTakeFirst();
     if (!sheet) return null;
+    return this.getBySheetId(sheet.id);
+  }
 
+  /**
+   * Shared hydration: pulls supplier_prices rows for a given sheet
+   * header and applies the AGC markdown factors. Extracted from
+   * getByDate so getBySheetId can reuse the exact same logic without
+   * a second round-trip.
+   */
+  private async hydrateSnapshot(sheet: {
+    id: string;
+    as_of_date: unknown;
+    as_of_time: string | null;
+    basis_gold: string | null;
+    ingested_at: Date;
+    ingested_by_user_id: string | null;
+  }): Promise<RarcoaSnapshot> {
     const rows = await this.db
       .selectFrom('supplier_prices')
       .selectAll()

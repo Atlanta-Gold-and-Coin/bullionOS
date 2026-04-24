@@ -69,6 +69,17 @@ export class RarcoaController {
     return snap ?? { cells: [], as_of_date: date };
   }
 
+  /**
+   * Fetch a specific sheet by id. Used by the admin history picker
+   * when the operator picks one of multiple same-day publications —
+   * date+time combined isn't URL-friendly, but the UUID is.
+   */
+  @Get('by-id/:id')
+  async byId(@Param('id', new ParseUUIDPipe()) id: string) {
+    const snap = await this.rarcoa.getBySheetId(id);
+    return snap ?? { cells: [], as_of_date: null };
+  }
+
   @Post('upload')
   @Roles('admin')
   @UseInterceptors(
