@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
 
@@ -30,6 +30,16 @@ export function MessageThread({
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Ref for the scroll container so we can pin to the newest message
+  // on open + when a new message arrives.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Tracked across renders: has the very first scroll-to-bottom happened
+  // yet (false until messages first arrive), and was the user sitting
+  // near the bottom at the time of the last scroll event. We only
+  // auto-scroll on new messages if they're near the bottom already —
+  // otherwise we'd yank them out of reading older history mid-scroll.
+  const didInitialScrollRef = useRef(false);
+  const isNearBottomRef = useRef(true);
 
   const { data } = useQuery({
     queryKey: ['messages', requestId],
@@ -48,6 +58,9 @@ export function MessageThread({
         body: JSON.stringify({ body: text }),
       });
       setBody('');
+      // Always scroll after the user sends — the message they just
+      // typed should appear in view regardless of where they were.
+      isNearBottomRef.current = true;
       await qc.invalidateQueries({ queryKey: ['messages', requestId] });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Send failed');
@@ -58,13 +71,41 @@ export function MessageThread({
 
   const messages = data ?? [];
 
+  // Auto-scroll to bottom:
+  //   - On first load, as soon as messages arrive (the "default" UX)
+  //   - On every new message, only if the user was already near the
+  //     bottom (within ~50px). React Query's poll refetch triggers this
+  //     too, so incoming admin replies land in view for a user who just
+  //     had the thread open.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (messages.length === 0) return;
+    if (!didInitialScrollRef.current || isNearBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      didInitialScrollRef.current = true;
+    }
+  }, [messages.length]);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    // 50px leeway — small overshoot (just scrolled past the last msg
+    // and rubber-banded) still counts as "near bottom".
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+  }
+
   return (
     <div className="mt-3 rounded-md border border-ink-200 bg-ink-50/40 p-3">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
         Thread
       </div>
 
-      <div className="mt-2 max-h-64 space-y-2 overflow-y-auto pr-1">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="mt-2 max-h-64 space-y-2 overflow-y-auto pr-1"
+      >
         {messages.length === 0 && (
           <p className="text-xs text-ink-400">No messages yet.</p>
         )}
