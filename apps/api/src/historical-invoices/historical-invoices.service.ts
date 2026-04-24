@@ -1,4 +1,11 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
 import type { DB, HistoricalInvoice } from '../db/types';
@@ -28,7 +35,59 @@ export interface HistoricalInvoiceInput {
 
 @Injectable()
 export class HistoricalInvoicesService {
+  private readonly logger = new Logger(HistoricalInvoicesService.name);
   constructor(@Inject(KYSELY) private readonly db: Kysely<DB>) {}
+
+  /**
+   * Translate common Postgres errors into actionable BadRequestException
+   * messages so the admin UI shows "Client not found" or "Invalid date"
+   * instead of a generic 500. Admin-only endpoint — leaking the exact
+   * error text is fine here. Pass through HttpException untouched so
+   * NotFoundException etc. surface cleanly.
+   */
+  private translateError(err: unknown, action: string): never {
+    if (err instanceof HttpException) throw err;
+    const msg = (err as Error).message ?? '';
+    this.logger.error(`${action} failed: ${msg}`, (err as Error).stack);
+    if (/foreign key constraint|violates foreign key/i.test(msg)) {
+      throw new BadRequestException(
+        `Client reference is invalid. Clear the client selection or pick an existing client and retry.`,
+      );
+    }
+    if (/invalid input syntax for type date/i.test(msg)) {
+      throw new BadRequestException(
+        `Invalid date. Use the YYYY-MM-DD format.`,
+      );
+    }
+    if (/value out of range|numeric field overflow/i.test(msg)) {
+      throw new BadRequestException(
+        `Amount is outside the allowed range (0 – 10,000,000).`,
+      );
+    }
+    if (/invalid input syntax for type uuid/i.test(msg)) {
+      throw new BadRequestException(
+        `Client selection looks malformed. Re-pick the client and retry.`,
+      );
+    }
+    if (/relation .* does not exist/i.test(msg)) {
+      throw new BadRequestException(
+        `Database schema missing. Migrations may not have run on this environment.`,
+      );
+    }
+    if (/check constraint/i.test(msg)) {
+      throw new BadRequestException(
+        `Row failed a data-validation check: ${msg.slice(0, 300)}`,
+      );
+    }
+    if (/not-null constraint/i.test(msg)) {
+      throw new BadRequestException(
+        `A required field was empty: ${msg.slice(0, 300)}`,
+      );
+    }
+    throw new BadRequestException(
+      `Save failed: ${msg.slice(0, 400) || 'unknown error'}`,
+    );
+  }
 
   /**
    * List historical invoices, newest-day first. Optional from/to filter
@@ -79,58 +138,70 @@ export class HistoricalInvoicesService {
   }
 
   async create(input: HistoricalInvoiceInput, actorId: string): Promise<HistoricalInvoiceRow> {
-    const row = await this.db
-      .insertInto('historical_invoices')
-      .values({
-        date: input.date,
-        type: input.type,
-        amount: toDbString(input.amount),
-        is_wholesale: input.is_wholesale ?? false,
-        client_id: input.client_id ?? null,
-        client_name: input.client_name?.trim() || null,
-        reference: input.reference?.trim() || null,
-        notes: input.notes?.trim() || null,
-        created_by_user_id: actorId,
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
-    // Fetch with the display-name join so the client gets a
-    // fully-populated row back immediately.
-    const fresh = await this.list({ from: String(row.date), to: String(row.date), limit: 500 });
-    return fresh.find((r) => r.id === row.id) ?? (row as unknown as HistoricalInvoiceRow);
+    try {
+      const row = await this.db
+        .insertInto('historical_invoices')
+        .values({
+          date: input.date,
+          type: input.type,
+          amount: toDbString(input.amount),
+          is_wholesale: input.is_wholesale ?? false,
+          client_id: input.client_id ?? null,
+          client_name: input.client_name?.trim() || null,
+          reference: input.reference?.trim() || null,
+          notes: input.notes?.trim() || null,
+          created_by_user_id: actorId,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      // Fetch with the display-name join so the client gets a
+      // fully-populated row back immediately.
+      const fresh = await this.list({
+        from: String(row.date),
+        to: String(row.date),
+        limit: 500,
+      });
+      return fresh.find((r) => r.id === row.id) ?? (row as unknown as HistoricalInvoiceRow);
+    } catch (err) {
+      this.translateError(err, 'create');
+    }
   }
 
   async update(
     id: string,
     patch: Partial<HistoricalInvoiceInput>,
   ): Promise<HistoricalInvoiceRow> {
-    const set: Record<string, unknown> = {};
-    if (patch.date !== undefined) set.date = patch.date;
-    if (patch.type !== undefined) set.type = patch.type;
-    if (patch.amount !== undefined) set.amount = toDbString(patch.amount);
-    if (patch.is_wholesale !== undefined) set.is_wholesale = patch.is_wholesale;
-    if (patch.client_id !== undefined) set.client_id = patch.client_id;
-    if (patch.client_name !== undefined) set.client_name = patch.client_name?.trim() || null;
-    if (patch.reference !== undefined) set.reference = patch.reference?.trim() || null;
-    if (patch.notes !== undefined) set.notes = patch.notes?.trim() || null;
-    const r = await this.db
-      .updateTable('historical_invoices')
-      .set(set)
-      .where('id', '=', id)
-      .executeTakeFirst();
-    if (Number(r.numUpdatedRows) === 0) {
-      throw new NotFoundException('Historical invoice not found');
+    try {
+      const set: Record<string, unknown> = {};
+      if (patch.date !== undefined) set.date = patch.date;
+      if (patch.type !== undefined) set.type = patch.type;
+      if (patch.amount !== undefined) set.amount = toDbString(patch.amount);
+      if (patch.is_wholesale !== undefined) set.is_wholesale = patch.is_wholesale;
+      if (patch.client_id !== undefined) set.client_id = patch.client_id;
+      if (patch.client_name !== undefined) set.client_name = patch.client_name?.trim() || null;
+      if (patch.reference !== undefined) set.reference = patch.reference?.trim() || null;
+      if (patch.notes !== undefined) set.notes = patch.notes?.trim() || null;
+      const r = await this.db
+        .updateTable('historical_invoices')
+        .set(set)
+        .where('id', '=', id)
+        .executeTakeFirst();
+      if (Number(r.numUpdatedRows) === 0) {
+        throw new NotFoundException('Historical invoice not found');
+      }
+      const rows = await this.list({ limit: 1 });
+      const fresh = await this.db
+        .selectFrom('historical_invoices')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow();
+      return {
+        ...(fresh as unknown as HistoricalInvoiceRow),
+        client_display_name: rows.find((r) => r.id === id)?.client_display_name ?? null,
+      };
+    } catch (err) {
+      this.translateError(err, 'update');
     }
-    const rows = await this.list({ limit: 1 });
-    const fresh = await this.db
-      .selectFrom('historical_invoices')
-      .selectAll()
-      .where('id', '=', id)
-      .executeTakeFirstOrThrow();
-    return {
-      ...(fresh as unknown as HistoricalInvoiceRow),
-      client_display_name: rows.find((r) => r.id === id)?.client_display_name ?? null,
-    };
   }
 
   async delete(id: string): Promise<void> {
