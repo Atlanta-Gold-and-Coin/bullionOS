@@ -1154,6 +1154,12 @@ export class InvoicesService {
       .where('c.exclude_from_reports', '=', false)
       .where('h.is_wholesale', '=', true)
       .where(sql<boolean>`h.date >= '2026-01-01'::date`)
+      // Auto-paid rule: anything 30+ days old is presumed settled and
+      // drops off the outstanding AP list. Aligns the wholesale-AP
+      // view with the same heuristic the client timeline uses for
+      // historical entries — past 30 days = paid in operator's mental
+      // model.
+      .where(sql<boolean>`h.date > current_date - interval '30 days'`)
       .orderBy('c.last_name')
       .orderBy('h.date', 'asc')
       .execute();

@@ -597,11 +597,16 @@ export class ClientsService {
           ).as('invoice_number'),
           'type',
           sql<string>`'finalized'`.as('status'),
-          // Historical entries don't track payment lifecycle — treat
-          // them as 'unpaid' for display so the StatusPill's paid-
-          // overrides rule doesn't accidentally promote a historical
-          // backfill row to a "Paid" pill.
-          sql<string>`'unpaid'`.as('payment_status'),
+          // Auto-paid rule: any historical invoice with a date 30+ days
+          // in the past is assumed settled. Captures the operator's
+          // mental model — "if it's been on the books a month, it's
+          // been paid." Anything within the last 30 days stays
+          // 'unpaid' so it shows up as outstanding in client + AP
+          // views until the operator deletes the row (or the 30-day
+          // window naturally expires).
+          sql<string>`case when date <= current_date - interval '30 days' then 'paid' else 'unpaid' end`.as(
+            'payment_status',
+          ),
           sql<string>`amount::text`.as('total'),
           sql<Date>`date::timestamptz`.as('created_at'),
         ])
