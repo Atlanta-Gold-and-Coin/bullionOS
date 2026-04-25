@@ -286,12 +286,14 @@ export class AurbitrageService {
   private async fetchFavorites(
     creds: CredentialsFor<'aurbitrage'>,
   ): Promise<AurbitrageFavoritesResponse> {
-    // Always ask for DollarPerPiece — gives us a normalized currency
-    // amount per coin/piece across all dealers. Saves us from writing
-    // unit-conversion logic on the display side. Some dealers will
-    // still report Percentage-format quotes when that's their native
-    // pricing model (premiums); we surface those with `format='%'`.
-    const url = `${creds.url.replace(/\/$/, '')}/pricing/favorites?convertFormat=DollarPerPiece`;
+    // Ask for DollarPerOz — operators compare wholesalers in $/oz
+    // because that's the standard unit metal trades in (regardless of
+    // coin denomination or fractional weight). Aurbitrage normalizes
+    // every dealer's quote to per-troy-oz on the server side. Some
+    // dealers' premiums-only listings may still come back in
+    // Percentage format when there's no $ basis to convert from; we
+    // surface those with `format='%'` and the UI handles them.
+    const url = `${creds.url.replace(/\/$/, '')}/pricing/favorites?convertFormat=DollarPerOz`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30_000);
     try {

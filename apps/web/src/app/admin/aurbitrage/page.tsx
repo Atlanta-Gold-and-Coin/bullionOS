@@ -468,14 +468,23 @@ function PriceTag({ quote, accent }: { quote: Quote; accent: 'green' | 'amber' }
     accent === 'green'
       ? 'text-green-700'
       : 'text-amber-700';
-  const sym = quote.format === '%' ? '%' : '$';
-  const formatted =
-    sym === '$'
-      ? `$${quote.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-      : `${quote.price.toFixed(2)}%`;
+  // We request DollarPerOz from the API, so $-format quotes are
+  // already $/oz. Append the unit so operators can compare dealers
+  // at a glance without second-guessing the basis. Percentage-format
+  // quotes (premiums on dealers that only quote relative to spot)
+  // render as N% — same convention as Aurbitrage's own UI.
+  const isPct = quote.format === '%';
+  const formatted = isPct
+    ? `${quote.price.toFixed(2)}%`
+    : `$${quote.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   return (
     <span className={`font-mono text-sm font-semibold tabular-nums ${cls}`}>
       {formatted}
+      {!isPct && (
+        <span className="ml-0.5 text-[10px] font-normal text-ink-400">
+          /oz
+        </span>
+      )}
     </span>
   );
 }
