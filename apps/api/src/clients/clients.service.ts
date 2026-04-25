@@ -573,6 +573,7 @@ export class ClientsService {
           'invoice_number',
           'type',
           'status',
+          'payment_status',
           'total',
           'created_at',
         ])
@@ -596,6 +597,11 @@ export class ClientsService {
           ).as('invoice_number'),
           'type',
           sql<string>`'finalized'`.as('status'),
+          // Historical entries don't track payment lifecycle — treat
+          // them as 'unpaid' for display so the StatusPill's paid-
+          // overrides rule doesn't accidentally promote a historical
+          // backfill row to a "Paid" pill.
+          sql<string>`'unpaid'`.as('payment_status'),
           sql<string>`amount::text`.as('total'),
           sql<Date>`date::timestamptz`.as('created_at'),
         ])

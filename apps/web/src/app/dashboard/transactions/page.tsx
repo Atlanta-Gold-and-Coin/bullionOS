@@ -10,6 +10,7 @@ interface InvoiceRow {
   invoice_number: string;
   type: 'buy' | 'sell';
   status: string;
+  payment_status?: string;
   total: string;
   created_at: string;
 }
@@ -52,7 +53,7 @@ export default function ClientTransactions() {
                   </td>
                   <td className="px-4 py-3">{inv.type.toUpperCase()}</td>
                   <td className="px-4 py-3">
-                    <StatusPill status={inv.status} />
+                    <StatusPill status={inv.status} paymentStatus={inv.payment_status} />
                   </td>
                   <td className="px-4 py-3 text-right font-mono">
                     ${Number(inv.total).toLocaleString(undefined, { maximumFractionDigits: 2 })}

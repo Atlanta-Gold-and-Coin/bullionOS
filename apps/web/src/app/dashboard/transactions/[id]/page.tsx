@@ -69,7 +69,7 @@ export default function ClientInvoiceDetail({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <StatusPill status={data.status} />
+          <StatusPill status={data.status} paymentStatus={data.payment_status} />
           <button
             onClick={openPdf}
             className="rounded-md border border-ink-200 px-3 py-1.5 text-sm hover:bg-ink-50"

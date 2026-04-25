@@ -358,7 +358,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                  eye doesn't land on them first.
             Every onClick/handler is preserved verbatim. */}
         <div className="flex flex-wrap items-center gap-2">
-          <StatusPill status={data.status} />
+          <StatusPill status={data.status} paymentStatus={data.payment_status} />
 
           {/* File-actions pill. EmailInvoiceButton is its own component
               (manages its own popover); keeping it inside the pill means

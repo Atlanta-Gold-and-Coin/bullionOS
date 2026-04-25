@@ -306,7 +306,7 @@ export default function InvoicesPage() {
                   </span>
                 </td>
                 <td className="px-4 py-3">
-                  <StatusPill status={inv.status} />
+                  <StatusPill status={inv.status} paymentStatus={inv.payment_status} />
                 </td>
                 <td className="px-4 py-3 text-xs capitalize text-ink-600">
                   {inv.payment_status.replace('_', ' ')}

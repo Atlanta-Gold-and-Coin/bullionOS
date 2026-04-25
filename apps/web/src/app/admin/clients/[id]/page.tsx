@@ -69,6 +69,7 @@ interface Timeline {
     invoice_number: string;
     type: 'buy' | 'sell';
     status: string;
+    payment_status?: string;
     total: string;
     created_at: string;
   }>;
@@ -369,7 +370,7 @@ export default function ClientDetailPage({
               className="flex items-center justify-between py-2 text-sm hover:bg-ink-50"
             >
               <span className="font-mono">{inv.invoice_number}</span>
-              <StatusPill status={inv.status} />
+              <StatusPill status={inv.status} paymentStatus={inv.payment_status} />
               <span className="font-mono text-ink-600">
                 ${Number(inv.total).toFixed(2)}
               </span>
