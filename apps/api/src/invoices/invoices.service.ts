@@ -167,10 +167,14 @@ export class InvoicesService {
         'c.email as client_email',
         'c.client_type as client_type',
         'c.company as client_company',
-        // Creator display name: full first/last when available, else
-        // the email's local-part (split on '@'). Falls back to null
-        // for legacy invoices with no created_by_user_id.
-        sql<string | null>`coalesce(nullif(trim(coalesce(u.first_name, '') || ' ' || coalesce(u.last_name, '')), ''), split_part(u.email, '@', 1))`.as(
+        // Creator display name: derived from the email's local-part
+        // (everything before the @) and capitalized via initcap.
+        // Users table only stores email — first/last names live on
+        // the clients table for end-customers, not on staff rows.
+        // For legacy invoices with no created_by_user_id, the
+        // left-join produces NULL email and the entire expression
+        // evaluates NULL — UI side just hides the line.
+        sql<string | null>`initcap(split_part(u.email, '@', 1))`.as(
           'created_by_name',
         ),
         'u.email as created_by_email',
