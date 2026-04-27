@@ -66,12 +66,12 @@ export class EodReportsService {
   ) {}
 
   /**
-   * Mon–Fri at 18:00 America/New_York. Storefront closes at 5pm,
-   * leaving an hour buffer for any final tickets to be marked paid
-   * before the report goes out. Skips weekends; admin can manually
-   * trigger via the controller if a Sat/Sun report is wanted.
+   * Mon–Fri at 17:00 America/New_York — fires at the close of
+   * business so the report lands in operators' inboxes immediately
+   * as the storefront shuts. Skips Sat/Sun; admin can manually
+   * trigger via the controller if a weekend report is wanted.
    */
-  @Cron('0 0 18 * * 1-5', {
+  @Cron('0 0 17 * * 1-5', {
     name: 'eod-report',
     timeZone: 'America/New_York',
   })
