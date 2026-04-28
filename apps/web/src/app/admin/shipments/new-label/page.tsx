@@ -447,6 +447,20 @@ export default function NewLabelWizardPage() {
       setError('Recipient address is incomplete.');
       return;
     }
+    // IFS rejects #26 with "Please Enter Valid Recipient Email Address"
+    // when client_email is blank, despite the docs saying it's only
+    // required when hold_for_pu=1. Catch it here so the operator gets
+    // a clear error in the recipient step instead of after walking
+    // through service/package/cost preview.
+    const email = state.client_email.trim();
+    if (!email) {
+      setError('Recipient email is required by IFS.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError('Recipient email looks malformed.');
+      return;
+    }
     // Run #9 verify
     setBusy(true);
     try {
@@ -845,6 +859,7 @@ export default function NewLabelWizardPage() {
           update={update}
           showEmail
           showPhone
+          emailRequired
         />
         <div className="mt-3 grid grid-cols-2 gap-3">
           <Field label="Reference (≤25 chars)">
@@ -1241,12 +1256,15 @@ function AddressFields({
   update,
   showEmail,
   showPhone,
+  emailRequired,
 }: {
   prefix: 'ca_' | 'client_';
   state: WizardState;
   update: (p: Partial<WizardState>) => void;
   showEmail?: boolean;
   showPhone?: boolean;
+  /** When true, label the email field as required (IFS #26 always wants it). */
+  emailRequired?: boolean;
 }) {
   // We branch on the prefix so TypeScript can narrow the field names.
   const get = (k: string) => (state as unknown as Record<string, string>)[`${prefix}${k}`] || '';
@@ -1341,10 +1359,11 @@ function AddressFields({
         </Field>
       )}
       {showEmail && (
-        <Field label="Email">
+        <Field label={emailRequired ? 'Email (required)' : 'Email'}>
           <input
             className="input"
             type="email"
+            required={emailRequired}
             value={get('email')}
             onChange={(e) => set('email', e.target.value)}
           />
