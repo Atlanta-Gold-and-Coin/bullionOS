@@ -13,6 +13,7 @@
 
 import {
   PURITY_OPTIONS,
+  SCRAP_METALS,
   UNIT_LABEL,
   METAL_LABEL,
   computeScrapRow,
@@ -21,11 +22,13 @@ import {
   type ScrapWeightUnit,
 } from './scrap-types';
 
+export type SpotPriceMap = Record<ScrapMetal, string>;
+
 interface Props {
   rows: ScrapRow[];
   onChange: (rows: ScrapRow[]) => void;
   /** Live spot prices in $/troy oz. Used to pre-fill new rows. */
-  spotPrices?: { gold: string; silver: string; platinum: string } | null;
+  spotPrices?: SpotPriceMap | null;
   mode?: 'buy' | 'sell';
 }
 
@@ -116,7 +119,7 @@ function ScrapRowCard({
             value={row.metal}
             onChange={(e) => onMetalChange(e.target.value as ScrapMetal)}
           >
-            {(['gold', 'silver', 'platinum'] as ScrapMetal[]).map((m) => (
+            {SCRAP_METALS.map((m) => (
               <option key={m} value={m}>
                 {METAL_LABEL[m]}
               </option>

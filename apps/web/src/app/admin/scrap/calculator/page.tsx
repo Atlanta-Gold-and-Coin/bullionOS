@@ -36,7 +36,12 @@ export default function ScrapCalculatorPage() {
   const [rows, setRows] = useState<ScrapRow[]>(() => [blankScrapRow()]);
 
   const spotPrices = spot
-    ? { gold: spot.gold, silver: spot.silver, platinum: spot.platinum }
+    ? {
+        gold: spot.gold,
+        silver: spot.silver,
+        platinum: spot.platinum,
+        palladium: spot.palladium,
+      }
     : null;
 
   function addRow() {
@@ -142,6 +147,10 @@ export default function ScrapCalculatorPage() {
             <span className="font-mono">
               <span className="text-ink-400">Pt</span>{' '}
               ${formatSpot(spot.platinum)}
+            </span>
+            <span className="font-mono">
+              <span className="text-ink-400">Pd</span>{' '}
+              ${formatSpot(spot.palladium)}
             </span>
           </>
         ) : (

@@ -117,7 +117,12 @@ export default function ScrapInvoicePage() {
 
   // ----- Spot pre-fill on metal change handled by row builder -----
   const spotPrices = spot
-    ? { gold: spot.gold, silver: spot.silver, platinum: spot.platinum }
+    ? {
+        gold: spot.gold,
+        silver: spot.silver,
+        platinum: spot.platinum,
+        palladium: spot.palladium,
+      }
     : null;
 
   // ----- Derived: total + per-leg validation -----
