@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
+import { canViewOwnerPrivate } from '../common/owner-privacy.helper';
 import type { Client, ClientType, DB } from '../db/types';
 import type { CreateClientDto, UpdateClientDto } from './dto/upsert-client.dto';
 
@@ -42,13 +43,17 @@ export class ClientsService {
    */
   async list(
     search?: string,
-    opts: { client_type?: ClientType } = {},
+    opts: { client_type?: ClientType; actorUserId?: string } = {},
   ): Promise<ClientSearchResult[]> {
     let clients: Array<Client & { score?: number }>;
+    const allowOwnerPrivate = opts.actorUserId
+      ? await canViewOwnerPrivate(this.db, opts.actorUserId)
+      : true;
 
     if (!search || !search.trim()) {
       let q = this.db.selectFrom('clients').selectAll();
       if (opts.client_type) q = q.where('client_type', '=', opts.client_type);
+      if (!allowOwnerPrivate) q = q.where('is_owner_private', '=', false);
       // Limit raised 500 → 2000. The invoice wizard's client combobox
       // is a client-side fuzzy picker over this full payload; when AGC
       // grew past 500 clients alphabetically, names past "V..." fell
@@ -90,6 +95,7 @@ export class ClientsService {
             ]),
           );
         if (opts.client_type) q = q.where('c.client_type', '=', opts.client_type);
+        if (!allowOwnerPrivate) q = q.where('c.is_owner_private', '=', false);
         return q
           .orderBy(
             sql`greatest(similarity(c.search_text, ${term}), word_similarity(${term}, c.search_text))`,
@@ -127,13 +133,23 @@ export class ClientsService {
     }));
   }
 
-  async getById(id: string): Promise<Client> {
+  async getById(id: string, opts: { actorUserId?: string } = {}): Promise<Client> {
     const row = await this.db
       .selectFrom('clients')
       .selectAll()
       .where('id', '=', id)
       .executeTakeFirst();
     if (!row) throw new NotFoundException('Client not found');
+    // Owner-privacy gate — 404 (not 403) for non-allowlisted callers
+    // hitting an is_owner_private record. The 404 keeps the existence
+    // of the client itself confidential.
+    if (
+      row.is_owner_private &&
+      opts.actorUserId &&
+      !(await canViewOwnerPrivate(this.db, opts.actorUserId))
+    ) {
+      throw new NotFoundException('Client not found');
+    }
     return row;
   }
 
@@ -624,8 +640,11 @@ export class ClientsService {
    * historical-invoices form (no line items / inventory side-effects
    * needed) and then losing visibility in downstream views.
    */
-  async getTimeline(clientId: string) {
-    await this.getById(clientId); // 404 if missing
+  async getTimeline(clientId: string, opts: { actorUserId?: string } = {}) {
+    // getById applies the owner-privacy gate; non-allowlisted callers
+    // get a 404 here so timeline detail can't leak around the client
+    // detail block.
+    await this.getById(clientId, opts);
 
     const [liveInvoices, histInvoices, quotes, requests, shipments] = await Promise.all([
       this.db

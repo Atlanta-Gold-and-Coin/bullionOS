@@ -43,20 +43,30 @@ export class AdminClientsController {
 
   @Get()
   list(
+    @CurrentUser() user: RequestUser,
     @Query('q') search?: string,
     @Query('client_type') client_type?: 'retail' | 'wholesaler',
   ) {
-    return this.clients.list(search, client_type ? { client_type } : {});
+    return this.clients.list(search, {
+      ...(client_type ? { client_type } : {}),
+      actorUserId: user.id,
+    });
   }
 
   @Get(':id')
-  getById(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.clients.getById(id);
+  getById(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.clients.getById(id, { actorUserId: user.id });
   }
 
   @Get(':id/timeline')
-  timeline(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.clients.getTimeline(id);
+  timeline(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.clients.getTimeline(id, { actorUserId: user.id });
   }
 
   /**

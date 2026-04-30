@@ -57,17 +57,27 @@ export class AdminInvoicesController {
 
   @Get()
   list(
+    @CurrentUser() user: RequestUser,
     @Query('client_id') clientId?: string,
     @Query('status') status?: InvoiceStatus,
     @Query('type') type?: InvoiceType,
     @Query('client_type') client_type?: 'retail' | 'wholesaler',
   ) {
-    return this.invoices.list({ clientId, status, type, client_type });
+    return this.invoices.list({
+      clientId,
+      status,
+      type,
+      client_type,
+      actorUserId: user.id,
+    });
   }
 
   @Get(':id')
-  getById(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.invoices.getById(id);
+  getById(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.invoices.getById(id, { actorUserId: user.id });
   }
 
   @Post()
@@ -108,9 +118,14 @@ export class AdminInvoicesController {
   @Get(':id/pdf')
   async downloadPdf(
     @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() user: RequestUser,
     @Res() res: Response,
   ) {
-    const invoice = await this.invoices.getById(id);
+    // getById applies the owner-private gate (returns 404 for non-
+    // allowlisted users hitting an is_owner_private invoice). PDF
+    // rendering reuses the same fetched data, so no separate check
+    // is needed here.
+    const invoice = await this.invoices.getById(id, { actorUserId: user.id });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',

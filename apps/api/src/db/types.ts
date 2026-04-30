@@ -89,6 +89,13 @@ export interface UsersTable {
    * per-user flip, not a code change.
    */
   can_post_daily_update: ColumnType<boolean, boolean | undefined, boolean>;
+  /**
+   * Allowlist for viewing owner-private invoices/clients (migration
+   * 038). Hunter + Tim get true; everyone else stays false. Default
+   * false so any newly-created admin/staff user has to be explicitly
+   * promoted to see the privacy-fenced records.
+   */
+  can_view_owner_private: ColumnType<boolean, boolean | undefined, boolean>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 }
@@ -151,6 +158,16 @@ export interface ClientsTable {
    *  aggregate views (Invoices list, KPI rollups, Wholesale AR). Used
    *  for owner/test clients whose activity shouldn't skew revenue. */
   exclude_from_reports: ColumnType<boolean, boolean | undefined, boolean>;
+  /**
+   * Migration 038: when true, this client is fully invisible to any
+   * admin/staff user without `users.can_view_owner_private = true`.
+   * Used for owner/accounting personal accounts whose individual
+   * transactions shouldn't be visible to the rest of the team — the
+   * dollar totals still flow into KPI/EOD/dashboards (privacy is
+   * detail-level only). Different from exclude_from_reports, which
+   * omits the dollars from totals entirely.
+   */
+  is_owner_private: ColumnType<boolean, boolean | undefined, boolean>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
   // Postgres GENERATED column (migration 006, rebuilt in 020 to include

@@ -304,6 +304,10 @@ export class AuthService {
         'u.status',
         'u.is_2fa_enabled',
         'u.last_login_at',
+        // Migration 038: surfaced so the web UI can conditionally
+        // render owner-privacy controls (the toggle on the client
+        // form, etc.) without a separate roundtrip.
+        'u.can_view_owner_private',
         'c.first_name',
         'c.last_name',
         'c.phone',

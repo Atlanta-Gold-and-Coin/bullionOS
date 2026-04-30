@@ -97,6 +97,17 @@ export class CreateClientDto {
   @IsOptional()
   @IsBoolean()
   is_portal_enabled?: boolean;
+
+  /**
+   * Migration 038: when true, this client and their invoices are
+   * fully invisible to admin/staff users without
+   * `users.can_view_owner_private`. Used for owner / accounting
+   * personal accounts. KPI/EOD totals still include the dollars —
+   * privacy is detail-level only.
+   */
+  @IsOptional()
+  @IsBoolean()
+  is_owner_private?: boolean;
 }
 
 export class UpdateClientDto {
@@ -178,4 +189,15 @@ export class UpdateClientDto {
   @IsOptional()
   @IsBoolean()
   is_portal_enabled?: boolean;
+
+  /**
+   * Migration 038: privacy fence — see CreateClientDto for semantics.
+   * Only effective when the requesting user has
+   * `can_view_owner_private = true`; the service rejects the field
+   * silently for non-allowlisted callers (no IDOR — they can't see
+   * the client to begin with).
+   */
+  @IsOptional()
+  @IsBoolean()
+  is_owner_private?: boolean;
 }

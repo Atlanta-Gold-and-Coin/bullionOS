@@ -17,6 +17,7 @@ import type {
   UserRole,
 } from '../db/types';
 import { d, toDbString, Decimal } from '../common/money';
+import { canViewOwnerPrivate } from '../common/owner-privacy.helper';
 import { PricingService } from '../pricing/pricing.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -117,8 +118,22 @@ export class InvoicesService {
        *  client — e.g. the client detail page — where hiding invoices
        *  from the client they belong to would be confusing. */
       includeExcluded?: boolean;
+      /**
+       * Caller's user id, used to enforce the owner-privacy allowlist
+       * (migration 038). When set, non-allowlisted users have
+       * is_owner_private clients' invoices filtered out entirely. When
+       * undefined (e.g. internal callers like the EOD service that
+       * shouldn't apply privacy), the filter is skipped.
+       */
+      actorUserId?: string;
     } = {},
   ): Promise<Array<Invoice & { client_name: string; client_type: string }>> {
+    // Owner-privacy filter: hide is_owner_private clients' invoices
+    // from any caller not on users.can_view_owner_private. Bypass
+    // when no actor is supplied (internal aggregation callers).
+    const allowOwnerPrivate = opts.actorUserId
+      ? await canViewOwnerPrivate(this.db, opts.actorUserId)
+      : true;
     // Include client name + type with the invoice so the tab'd list view
     // can render rows without a second roundtrip.
     let q = this.db
@@ -143,12 +158,22 @@ export class InvoicesService {
     if (!opts.includeExcluded && !opts.clientId) {
       q = q.where('c.exclude_from_reports', '=', false);
     }
+    if (!allowOwnerPrivate) {
+      // Hide rows whose client is owner-private — applies to both the
+      // global list and any clientId-filtered query (a non-allowlisted
+      // user reaching the URL with a private client_id should still
+      // see nothing, same as the empty list).
+      q = q.where('c.is_owner_private', '=', false);
+    }
     return q.execute() as unknown as Promise<
       Array<Invoice & { client_name: string; client_type: string }>
     >;
   }
 
-  async getById(id: string): Promise<InvoiceWithLines> {
+  async getById(
+    id: string,
+    opts: { actorUserId?: string } = {},
+  ): Promise<InvoiceWithLines> {
     const invoice = await this.db
       .selectFrom('invoices as i')
       .innerJoin('clients as c', 'c.id', 'i.client_id')
@@ -167,6 +192,7 @@ export class InvoicesService {
         'c.email as client_email',
         'c.client_type as client_type',
         'c.company as client_company',
+        'c.is_owner_private as client_is_owner_private',
         // Creator display name: derived from the email's local-part
         // (everything before the @) and capitalized via initcap.
         // Users table only stores email — first/last names live on
@@ -183,6 +209,18 @@ export class InvoicesService {
       .executeTakeFirst();
 
     if (!invoice) throw new NotFoundException('Invoice not found');
+
+    // Owner-privacy gate: 404 (not 403) if the invoice belongs to an
+    // is_owner_private client and the caller isn't on the allowlist.
+    // 404 keeps the existence of the record itself confidential —
+    // the caller can't distinguish "blocked" from "doesn't exist."
+    if (
+      (invoice as { client_is_owner_private?: boolean }).client_is_owner_private &&
+      opts.actorUserId &&
+      !(await canViewOwnerPrivate(this.db, opts.actorUserId))
+    ) {
+      throw new NotFoundException('Invoice not found');
+    }
 
     const lines = await this.db
       .selectFrom('invoice_line_items')
@@ -997,7 +1035,10 @@ export class InvoicesService {
     opts: { to: string; saveToClient?: boolean },
     actor: Actor,
   ): Promise<{ sent_to: string; saved_to_client: boolean }> {
-    const invoice = await this.getById(id);
+    // getById gates on owner-privacy — non-allowlisted operators
+    // emailing an is_owner_private invoice get a 404 here, so the
+    // PDF never renders and no email leaves the box.
+    const invoice = await this.getById(id, { actorUserId: actor.id });
     const to = opts.to.trim().toLowerCase();
     if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
       throw new BadRequestException('Invalid email address');
@@ -1119,7 +1160,7 @@ export class InvoicesService {
    * Uses the partial index `invoices_outstanding_by_client_idx` (migration
    * 022) for the finalized+wholesale filter.
    */
-  async listOutstandingWholesale(): Promise<{
+  async listOutstandingWholesale(opts: { actorUserId?: string } = {}): Promise<{
     total_owed: string;
     by_client: Array<{
       client_id: string;
@@ -1136,7 +1177,10 @@ export class InvoicesService {
       }>;
     }>;
   }> {
-    const rows = await this.db
+    const allowOwnerPrivate = opts.actorUserId
+      ? await canViewOwnerPrivate(this.db, opts.actorUserId)
+      : true;
+    let rowsQ = this.db
       .selectFrom('invoices as i')
       .innerJoin('clients as c', 'c.id', 'i.client_id')
       .select([
@@ -1155,7 +1199,11 @@ export class InvoicesService {
       // Skip invoices against clients flagged exclude_from_reports —
       // same gate as the Invoices list + KPI rollup. Keeps owner/test
       // transactions out of AR.
-      .where('c.exclude_from_reports', '=', false)
+      .where('c.exclude_from_reports', '=', false);
+    if (!allowOwnerPrivate) {
+      rowsQ = rowsQ.where('c.is_owner_private', '=', false);
+    }
+    const rows = await rowsQ
       // Outstanding = finalized OR shipped, but not yet paid. Wholesale
       // routinely ships before payment lands, so 'shipped' must stay on
       // the receivables list until Mark Paid fires. Guarded by
@@ -1175,7 +1223,7 @@ export class InvoicesService {
     // Pre-2026 historicals stay archive-only. No paid_at on the
     // historical_invoices table yet, so deleting the historical row
     // is how an operator clears it from this list for now.
-    const histRows = await this.db
+    let histQ = this.db
       .selectFrom('historical_invoices as h')
       .innerJoin('clients as c', 'c.id', 'h.client_id')
       .select((eb) => [
@@ -1204,7 +1252,11 @@ export class InvoicesService {
       // view with the same heuristic the client timeline uses for
       // historical entries — past 30 days = paid in operator's mental
       // model.
-      .where(sql<boolean>`h.date > current_date - interval '30 days'`)
+      .where(sql<boolean>`h.date > current_date - interval '30 days'`);
+    if (!allowOwnerPrivate) {
+      histQ = histQ.where('c.is_owner_private', '=', false);
+    }
+    const histRows = await histQ
       .orderBy('c.last_name')
       .orderBy('h.date', 'asc')
       .execute();

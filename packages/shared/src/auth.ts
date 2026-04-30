@@ -35,6 +35,9 @@ export const meResponseSchema = z.object({
   status: z.enum(['active', 'restricted', 'disabled']),
   is_2fa_enabled: z.boolean(),
   last_login_at: z.string().datetime().nullable(),
+  // Owner-private allowlist flag (migration 038). Surfaced so the
+  // web UI can conditionally render privacy controls.
+  can_view_owner_private: z.boolean().optional(),
   first_name: z.string().nullable(),
   last_name: z.string().nullable(),
   phone: z.string().nullable(),

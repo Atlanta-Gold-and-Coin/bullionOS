@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { apiFetch, ApiError } from '@/lib/api-client';
+import { useAuth } from '@/lib/auth-context';
 
 export interface ClientFormValues {
   first_name: string;
@@ -23,6 +24,15 @@ export interface ClientFormValues {
   /** Retail (default) vs wholesaler. Drives the name-or-company requirement. */
   client_type: 'retail' | 'wholesaler';
   is_portal_enabled?: boolean;
+  /**
+   * Owner-private fence (migration 038). When true, this client +
+   * their invoices are invisible to admin/staff users without
+   * users.can_view_owner_private. Form gates rendering of the toggle
+   * to allowlisted users only — non-allowlisted users never see this
+   * field, can't accidentally flip it, and can't even see clients
+   * where it's already set.
+   */
+  is_owner_private?: boolean;
 }
 
 // Common answers for the "how heard about us" datalist. Free-form — the
@@ -53,6 +63,15 @@ export function ClientForm({
   const [f, setF] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
+  // Owner-privacy toggle is gated on the user's allowlist flag
+  // (migration 038). Non-allowlisted users never see the toggle —
+  // they can't even view the client to begin with, so the field
+  // would be unreachable, but defense-in-depth at the UI level.
+  const canManageOwnerPrivate = Boolean(
+    (user as { can_view_owner_private?: boolean } | null)
+      ?.can_view_owner_private,
+  );
 
   function set<K extends keyof ClientFormValues>(k: K, v: ClientFormValues[K]) {
     setF((p) => ({ ...p, [k]: v }));
@@ -259,6 +278,31 @@ export function ClientForm({
         />
       </L>
 
+      {canManageOwnerPrivate && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              checked={f.is_owner_private ?? false}
+              onChange={(e) => set('is_owner_private', e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-semibold text-amber-900">
+                Owner-private (restricted visibility)
+              </span>
+              <span className="mt-0.5 block text-xs text-amber-800">
+                When checked, this client and all their invoices are
+                fully invisible to admin/staff users without the
+                owner-private allowlist. KPI/EOD/dashboard totals
+                still include the dollars — only detail rows are
+                hidden. Use for owner / accounting personal accounts.
+              </span>
+            </span>
+          </label>
+        </div>
+      )}
+
       {error && (
         <div role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
@@ -327,6 +371,10 @@ export function toDto(v: ClientFormValues) {
     notes: v.notes.trim() || undefined,
     heard_from: v.heard_from.trim() || undefined,
     client_type: v.client_type,
+    // Only send is_owner_private when the form actually exposed the
+    // toggle (allowlisted users). For everyone else the field is
+    // undefined and the backend leaves the existing value alone.
+    is_owner_private: v.is_owner_private,
   };
 }
 
@@ -359,5 +407,6 @@ export function fromClient(
     notes: c.notes ?? '',
     heard_from: c.heard_from ?? '',
     client_type: c.client_type ?? 'retail',
+    is_owner_private: c.is_owner_private ?? false,
   };
 }

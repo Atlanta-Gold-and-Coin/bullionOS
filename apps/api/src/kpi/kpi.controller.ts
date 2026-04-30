@@ -2,6 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
 import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
+import { CurrentUser, type RequestUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { InvoicesService } from '../invoices/invoices.service';
 import type { DB } from '../db/types';
@@ -64,8 +65,12 @@ export class KpiController {
    * what the supporting drill-down table renders.
    */
   @Get('wholesale-owed')
-  wholesaleOwed() {
-    return this.invoices.listOutstandingWholesale();
+  wholesaleOwed(@CurrentUser() user: RequestUser) {
+    // Owner-private clients are filtered out of the AR list for non-
+    // allowlisted operators. The aggregate dollars still surface in
+    // the rolled-up KPI totals (those don't filter); this drill-down
+    // hides per-row detail.
+    return this.invoices.listOutstandingWholesale({ actorUserId: user.id });
   }
 
   /**
