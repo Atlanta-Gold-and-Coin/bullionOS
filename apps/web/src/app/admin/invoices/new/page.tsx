@@ -84,6 +84,14 @@ interface DraftLine {
   quantity: number;
   custom_name: string;
   override_unit_price: string;
+  /**
+   * When true, force the row into ad-hoc / free-form mode regardless
+   * of whether custom_name is filled yet. Set by the explicit
+   * "+ Free-form line" button so the operator sees the Item name
+   * input on row 1 instead of the ProductCombobox (which would
+   * happily eat their typing as search text and discard it on blur).
+   */
+  ad_hoc?: boolean;
 }
 
 interface PaymentLeg {
@@ -833,6 +841,12 @@ export default function NewInvoicePage() {
                     quantity: 1,
                     custom_name: '',
                     override_unit_price: '',
+                    // ad_hoc=true forces the LineRow to render the
+                    // Item name input directly instead of the
+                    // ProductCombobox — the bug where typing into the
+                    // combobox's search box and clicking away wiped
+                    // the text.
+                    ad_hoc: true,
                   },
                 ])
               }
@@ -1237,7 +1251,11 @@ function LineRow({
   onChange: (patch: Partial<DraftLine>) => void;
   onRemove: () => void;
 }) {
-  const isAdHoc = line.product_id === '' && !!line.custom_name;
+  // Either explicitly forced via the "+ Free-form line" button
+  // (line.ad_hoc=true), or implicitly via the ProductCombobox's
+  // "ad-hoc" pick (which sets custom_name to a placeholder string).
+  const isAdHoc =
+    line.product_id === '' && (line.ad_hoc === true || !!line.custom_name);
   const liveUnit = type === 'sell' ? quote?.sell_unit_price : quote?.buy_unit_price;
   const effectiveUnit =
     line.override_unit_price.trim() !== ''
@@ -1254,20 +1272,49 @@ function LineRow({
     <div className="rounded-md border border-ink-100 p-3">
       <div className="grid grid-cols-12 items-center gap-3">
         <div className="col-span-5">
-          <ProductCombobox
-            products={products}
-            value={line.product_id}
-            adHoc={isAdHoc}
-            onChange={(productId) =>
-              onChange({ product_id: productId, custom_name: '' })
-            }
-            onPickAdHoc={() =>
-              onChange({
-                product_id: '',
-                custom_name: line.custom_name || 'Scrap / ad-hoc',
-              })
-            }
-          />
+          {line.ad_hoc ? (
+            // Explicit free-form line — show the Item name field
+            // directly so the operator types into a real input that
+            // commits to line.custom_name on every keystroke instead
+            // of into the ProductCombobox's search box (which is
+            // internal state and gets discarded on blur). "Use catalog
+            // product instead" link reverts the line back to the
+            // combobox if they actually wanted a catalog item after all.
+            <div className="space-y-1">
+              <input
+                value={line.custom_name}
+                onChange={(e) => onChange({ custom_name: e.target.value })}
+                className="input w-full text-sm"
+                placeholder="Item name (e.g. 14k broken chain, 8.2 g)"
+                maxLength={200}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({ ad_hoc: false, custom_name: '', product_id: '' })
+                }
+                className="text-[10px] text-ink-400 underline-offset-2 hover:underline"
+              >
+                use catalog product instead
+              </button>
+            </div>
+          ) : (
+            <ProductCombobox
+              products={products}
+              value={line.product_id}
+              adHoc={isAdHoc}
+              onChange={(productId) =>
+                onChange({ product_id: productId, custom_name: '' })
+              }
+              onPickAdHoc={() =>
+                onChange({
+                  product_id: '',
+                  custom_name: line.custom_name || 'Scrap / ad-hoc',
+                })
+              }
+            />
+          )}
         </div>
         <input
           type="number"
@@ -1315,7 +1362,11 @@ function LineRow({
           ×
         </button>
       </div>
-      {isAdHoc && (
+      {/* Bottom row: legacy ad-hoc flow (combobox-picked) gets a
+          duplicate Item name field here; the explicit free-form flow
+          (line.ad_hoc) already shows it inline at the top, so we skip
+          the name dup and just surface the price-needed nudge. */}
+      {isAdHoc && !line.ad_hoc && (
         <div className="mt-2 flex items-center gap-2">
           <label className="text-xs text-ink-400">Item name</label>
           <input
@@ -1330,6 +1381,13 @@ function LineRow({
           )}
         </div>
       )}
+      {isAdHoc &&
+        line.ad_hoc &&
+        line.override_unit_price.trim() === '' && (
+          <div className="mt-2 text-right text-xs text-red-600">
+            Enter a unit price →
+          </div>
+        )}
     </div>
   );
 }
