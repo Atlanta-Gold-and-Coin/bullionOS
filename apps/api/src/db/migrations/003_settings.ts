@@ -24,13 +24,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
   `.execute(db);
 
-  // Seed reasonable defaults.
-  await sql`
-    INSERT INTO app_settings (key, value) VALUES
-      ('branding.company_name', '"AGC"'::jsonb),
-      ('branding.company_tagline', '"Precious Metals Trading"'::jsonb),
-      ('branding.logo_path', 'null'::jsonb)
-  `.execute(db);
+  // No seed values — `SettingsService.getBranding()` returns neutral
+  // placeholders when keys are absent. Each tenant fills branding via
+  // the admin UI on first run.
 }
 
 export async function down(db: Kysely<unknown>): Promise<void> {

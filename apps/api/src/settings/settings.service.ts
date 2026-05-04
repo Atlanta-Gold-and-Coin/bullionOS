@@ -2,6 +2,14 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
 import type { DB } from '../db/types';
+import {
+  FLAG_REGISTRY,
+  VALUE_REGISTRY,
+  type FlagName,
+  type ValueName,
+  type ValueOf,
+  type AppSettingsResponse,
+} from './settings-registry';
 
 export interface BrandingSettings {
   company_name: string;
@@ -50,19 +58,143 @@ export class SettingsService {
     ]);
     const slugs = new Set(assets.map((a) => a.slug));
     return {
-      company_name: (all['branding.company_name'] as string) ?? 'Atlanta Gold and Coin',
+      company_name: (all['branding.company_name'] as string) ?? 'Your Company',
       company_tagline: (all['branding.company_tagline'] as string) ?? '',
-      address_line1:
-        (all['branding.address_line1'] as string) ?? '8480 Holcomb Bridge Rd #200',
+      address_line1: (all['branding.address_line1'] as string) ?? '',
       address_line2: (all['branding.address_line2'] as string) ?? '',
       address_city_state_zip:
-        (all['branding.address_city_state_zip'] as string) ?? 'Alpharetta, GA 30022',
-      phone: (all['branding.phone'] as string) ?? '404-236-9744',
-      website: (all['branding.website'] as string) ?? 'atlantagoldandcoin.com',
+        (all['branding.address_city_state_zip'] as string) ?? '',
+      phone: (all['branding.phone'] as string) ?? '',
+      website: (all['branding.website'] as string) ?? '',
       has_logo: slugs.has('logo'),
       logo_url: slugs.has('logo') ? '/api/v1/public/branding/logo' : null,
       has_favicon: slugs.has('favicon'),
       favicon_url: slugs.has('favicon') ? '/api/v1/public/branding/favicon' : null,
+    };
+  }
+
+  // ─── Registry-backed settings (flags + typed values) ─────────────
+  //
+  // Every key here is declared in settings-registry.ts. The registry
+  // owns the default + type, so a missing or malformed jsonb value
+  // falls back to the registry default rather than crashing the
+  // caller. Use these helpers from BE code; the FE reads them via
+  // GET /admin/settings.
+
+  async getFlag(name: FlagName): Promise<boolean> {
+    const def = FLAG_REGISTRY[name];
+    const row = await this.db
+      .selectFrom('app_settings')
+      .select('value')
+      .where('key', '=', `flags.${name}`)
+      .executeTakeFirst();
+    if (!row) return def.default;
+    return typeof row.value === 'boolean' ? row.value : def.default;
+  }
+
+  async setFlag(
+    name: FlagName,
+    value: boolean,
+    actorId: string | null = null,
+  ): Promise<void> {
+    await this.db
+      .insertInto('app_settings')
+      .values({
+        key: `flags.${name}`,
+        value: sql`${JSON.stringify(value)}::jsonb`,
+        updated_by_user_id: actorId,
+      })
+      .onConflict((oc) =>
+        oc.column('key').doUpdateSet({
+          value: sql`${JSON.stringify(value)}::jsonb`,
+          updated_by_user_id: actorId,
+          updated_at: new Date(),
+        }),
+      )
+      .execute();
+  }
+
+  async getValue<K extends ValueName>(name: K): Promise<ValueOf<K>> {
+    const def = VALUE_REGISTRY[name];
+    const row = await this.db
+      .selectFrom('app_settings')
+      .select('value')
+      .where('key', '=', name)
+      .executeTakeFirst();
+    if (!row) return def.default as ValueOf<K>;
+    if (def.type === 'number') {
+      return (typeof row.value === 'number'
+        ? row.value
+        : def.default) as ValueOf<K>;
+    }
+    return (typeof row.value === 'string'
+      ? row.value
+      : def.default) as ValueOf<K>;
+  }
+
+  async setValue<K extends ValueName>(
+    name: K,
+    value: ValueOf<K>,
+    actorId: string | null = null,
+  ): Promise<void> {
+    const def = VALUE_REGISTRY[name];
+    if (def.type === 'number' && typeof value !== 'number') {
+      throw new Error(`Setting ${name} requires a number`);
+    }
+    if (def.type === 'string' && typeof value !== 'string') {
+      throw new Error(`Setting ${name} requires a string`);
+    }
+    await this.db
+      .insertInto('app_settings')
+      .values({
+        key: name,
+        value: sql`${JSON.stringify(value)}::jsonb`,
+        updated_by_user_id: actorId,
+      })
+      .onConflict((oc) =>
+        oc.column('key').doUpdateSet({
+          value: sql`${JSON.stringify(value)}::jsonb`,
+          updated_by_user_id: actorId,
+          updated_at: new Date(),
+        }),
+      )
+      .execute();
+  }
+
+  /**
+   * One-shot read of every FE-facing setting: branding, all flags
+   * (registry-resolved with defaults), all typed values. Used by the
+   * single GET /admin/settings call that powers useAppSettings on the
+   * FE — keeps page loads to one round trip.
+   */
+  async getAppSettings(): Promise<AppSettingsResponse> {
+    const [branding, allRows] = await Promise.all([
+      this.getBranding(),
+      this.db.selectFrom('app_settings').selectAll().execute(),
+    ]);
+    const byKey = new Map<string, unknown>();
+    for (const r of allRows) byKey.set(r.key, r.value);
+
+    const flags: Record<string, boolean> = {};
+    for (const [name, def] of Object.entries(FLAG_REGISTRY)) {
+      const v = byKey.get(`flags.${name}`);
+      flags[name] = typeof v === 'boolean' ? v : def.default;
+    }
+
+    const values: Record<string, unknown> = {};
+    for (const [name, def] of Object.entries(VALUE_REGISTRY)) {
+      const v = byKey.get(name);
+      if (def.type === 'number') {
+        values[name] = typeof v === 'number' ? v : def.default;
+      } else {
+        values[name] = typeof v === 'string' ? v : def.default;
+      }
+    }
+
+    return {
+      branding,
+      flags: flags as AppSettingsResponse['flags'],
+      values: values as AppSettingsResponse['values'],
     };
   }
 

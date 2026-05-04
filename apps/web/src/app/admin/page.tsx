@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError, getAccessToken } from '@/lib/api-client';
+import { useFlag, useSetting } from '@/lib/use-app-settings';
 
 /**
  * Admin dashboard.
@@ -187,14 +188,6 @@ function Stat({
 
 // ─── Client Type KPI (New vs Returning, month-over-month) ─────────────
 
-/**
- * Monthly target for new clients. Drives the baseline indicator on
- * the dashboard "New · {month}" tile. Hard-coded for now — operator
- * preference (Hunter) until/unless we need per-month or per-period
- * targets, in which case it'd move to app_settings.
- */
-const NEW_CLIENTS_BASELINE = 72;
-
 interface TrackingBucket {
   bucket_start: string;
   bucket_label: string;
@@ -213,6 +206,7 @@ interface TrackingBucket {
  * AdminClientsController's @Get(':id') UUID route).
  */
 function ClientTypeKpi() {
+  const newClientsBaseline = useSetting('dashboard.new_clients_baseline');
   const { data, isLoading, error } = useQuery<{
     months: number;
     buckets: TrackingBucket[];
@@ -283,12 +277,9 @@ function ClientTypeKpi() {
           delta={newDelta}
           deltaLabel={prior ? `vs ${prior.bucket_label}` : null}
           tone="emerald"
-          // Monthly target. Shown beside the headline number with a
-          // small progress bar so operators can eyeball "on track vs.
-          // behind" at a glance. If the target moves, change here —
-          // not stored in app_settings yet because there's only one
-          // metric tracking against a baseline today.
-          baseline={NEW_CLIENTS_BASELINE}
+          // Monthly target. Edit via Settings → Features
+          // (`dashboard.new_clients_baseline`). 0 hides the baseline UI.
+          baseline={newClientsBaseline > 0 ? newClientsBaseline : undefined}
         />
         <KpiTile
           label={`Returning · ${current.bucket_label}`}

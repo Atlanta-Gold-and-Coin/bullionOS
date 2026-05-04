@@ -5,12 +5,13 @@ import Decimal from 'decimal.js';
 import { KYSELY } from '../db/database.module';
 import type { DB } from '../db/types';
 import { EmailService } from '../email/email.service';
+import { SettingsService } from '../settings/settings.service';
 
 /**
  * End-of-day business report. Emails a per-metal sales / purchase
  * breakdown (today / week-to-date / month-to-date) to all active
- * @atlantagoldandcoin.com and @atlantagoldandcoinbuyers.com users
- * who haven't opted out of email notifications.
+ * admin/staff users who haven't opted out of email notifications,
+ * plus any addresses in the `eod_report.extra_recipients` setting.
  *
  * Cron fires Mon–Fri at 18:00 ET (6pm = end of storefront hours).
  * Skips weekends — the storefront is closed and there's no
@@ -76,6 +77,7 @@ export class EodReportsService {
   constructor(
     @Inject(KYSELY) private readonly db: Kysely<DB>,
     private readonly email: EmailService,
+    private readonly settings: SettingsService,
   ) {}
 
   /**
@@ -112,23 +114,28 @@ export class EodReportsService {
         ok: false,
         recipients: [],
         empty_day: data.empty_today,
-        message: 'No eligible recipients (need @atlantagoldandcoin[buyers].com user with email_notifications=true).',
+        message:
+          'No eligible recipients (need an active admin/staff user with email_notifications=true, or an entry in eod_report.extra_recipients).',
       };
     }
 
-    const html = this.renderHtml(data);
-    const subject = `AGC End-of-Day · ${data.label_today} · ${data.empty_today ? 'no activity' : '$' + data.today.sells.total.toFixed(0) + ' sells / $' + data.today.buys.total.toFixed(0) + ' buys'}`;
+    const branding = await this.settings.getBranding();
+    const allSettings = await this.settings.getAll();
+    const appUrl = process.env.WEB_ORIGIN ?? '';
+    const html = this.renderHtml(data, {
+      companyName: branding.company_name,
+      appUrl,
+    });
+    const subject = `${branding.company_name} End-of-Day · ${data.label_today} · ${data.empty_today ? 'no activity' : '$' + data.today.sells.total.toFixed(0) + ' sells / $' + data.today.buys.total.toFixed(0) + ' buys'}`;
 
-    // EOD reports go out under info@atlantagoldandcoin.com (vs. the
-    // sales@…buyers.com SMTP_FROM default that the rest of the app
-    // uses). Operator preference — keeps customer-facing
-    // notifications under the sales@ identity while routine internal
-    // dispatches use the generic info@ inbox.
-    //
-    // Gmail SMTP requires this address to be configured as a "Send
-    // mail as" alias under sales@'s account; otherwise Gmail silently
-    // rewrites the From back to sales@.
-    const eodFrom = 'Atlanta Gold & Coin <info@atlantagoldandcoin.com>';
+    // Per-tenant From override. When unset, EmailService falls back to
+    // SMTP_FROM (the env-level default for outbound mail). Operators
+    // who run a separate "info@" or "reports@" alias can set this in
+    // Settings → EOD; Gmail SMTP requires the alias to be configured as
+    // "Send mail as" under the authenticated mailbox or it'll silently
+    // rewrite the From back.
+    const eodFrom =
+      (allSettings['eod_report.from_email'] as string | undefined) ?? undefined;
 
     // Send one BCC blast — keeps recipient list private and avoids
     // looking like a reply-all chain. EmailService swallows per-send
@@ -139,7 +146,7 @@ export class EodReportsService {
         to,
         subject,
         html,
-        text: this.renderPlaintext(data),
+        text: this.renderPlaintext(data, { companyName: branding.company_name }),
         from: eodFrom,
       });
     }
@@ -330,17 +337,16 @@ export class EodReportsService {
   // ── Recipients ────────────────────────────────────────────────
 
   private async resolveRecipients(): Promise<string[]> {
+    // Active admin/staff users with email notifications enabled.
+    // Replaces the old domain-allowlist filter — for a multi-tenant
+    // deploy, the role gate is the right boundary (a tenant's admins
+    // get the report, regardless of email domain).
     const rows = await this.db
       .selectFrom('users')
       .select('email')
       .where('status', '=', 'active')
       .where('email_notifications', '=', true)
-      .where((eb) =>
-        eb.or([
-          eb('email', 'like', '%@atlantagoldandcoin.com'),
-          eb('email', 'like', '%@atlantagoldandcoinbuyers.com'),
-        ]),
-      )
+      .where('role', 'in', ['admin', 'staff'])
       .execute();
     const fromUsers = rows.map((r) => r.email.toLowerCase());
 
@@ -419,7 +425,10 @@ export class EodReportsService {
    * clients strip <style> tags. Bars are CSS-width divs (not SVG)
    * so they render in Outlook desktop, which strips <svg>.
    */
-  renderHtml(d: EodReportData): string {
+  renderHtml(
+    d: EodReportData,
+    opts: { companyName: string; appUrl: string },
+  ): string {
     const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
     const dollars = (n: number) =>
       `$${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
@@ -582,7 +591,7 @@ export class EodReportsService {
     ${this.renderForecastBlock(d, esc, dollars, metalColors)}
     <tr>
       <td style="padding:14px 24px;background:#fafafb;border-top:1px solid #f0f0f3;font-size:11px;color:#888;">
-        Sent automatically by AGC Desk · <a href="https://agcdesk.com/admin/kpi" style="color:#888;text-decoration:underline;">Open KPI dashboard →</a>
+        Sent automatically by ${esc(opts.companyName)}${opts.appUrl ? ` · <a href="${esc(opts.appUrl)}/admin/kpi" style="color:#888;text-decoration:underline;">Open KPI dashboard →</a>` : ''}
       </td>
     </tr>
   </table>
@@ -663,11 +672,11 @@ export class EodReportsService {
   }
 
   /** Plaintext fallback for clients that strip HTML. */
-  renderPlaintext(d: EodReportData): string {
+  renderPlaintext(d: EodReportData, opts: { companyName: string }): string {
     const $ = (n: number) =>
       `$${n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
     const lines: string[] = [];
-    lines.push(`AGC End of Day — ${d.label_today}`);
+    lines.push(`${opts.companyName} End of Day — ${d.label_today}`);
     lines.push('='.repeat(40));
     if (d.empty_today) lines.push('No qualifying invoices today.');
     lines.push('');

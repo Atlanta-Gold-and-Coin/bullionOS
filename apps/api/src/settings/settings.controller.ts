@@ -20,6 +20,13 @@ import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, type RequestUser } from '../common/decorators/current-user.decorator';
 import { SettingsService } from './settings.service';
+import {
+  FLAG_REGISTRY,
+  VALUE_REGISTRY,
+  type FlagName,
+  type ValueName,
+  type ValueOf,
+} from './settings-registry';
 
 class UpdateBrandingDto {
   @IsOptional() @IsString() @MaxLength(100) company_name?: string;
@@ -159,7 +166,75 @@ export class SettingsController {
   @Get('admin/settings')
   @Roles('admin', 'staff')
   async get() {
-    return { branding: await this.settings.getBranding() };
+    // Returns { branding, flags, values } — single fetch that powers
+    // the FE useAppSettings hook and any settings-derived UI.
+    // Backward-compatible with consumers that only read `branding`.
+    return this.settings.getAppSettings();
+  }
+
+  /**
+   * Registry metadata (descriptions, defaults, types) so the admin
+   * Settings → Features page can render a generic toggle UI without
+   * knowing about each flag/value individually.
+   */
+  @Get('admin/settings/registry')
+  @Roles('admin')
+  getRegistry() {
+    return {
+      flags: Object.entries(FLAG_REGISTRY).map(([name, def]) => ({
+        name,
+        default: def.default,
+        description: def.description,
+      })),
+      values: Object.entries(VALUE_REGISTRY).map(([name, def]) => ({
+        name,
+        type: def.type,
+        default: def.default,
+        description: def.description,
+      })),
+    };
+  }
+
+  @Patch('admin/settings/flags/:name')
+  @Roles('admin')
+  async setFlag(
+    @Param('name') name: string,
+    @Body() dto: { value: boolean },
+    @CurrentUser() user: RequestUser,
+  ) {
+    if (!(name in FLAG_REGISTRY)) {
+      throw new BadRequestException(`Unknown flag: ${name}`);
+    }
+    if (typeof dto?.value !== 'boolean') {
+      throw new BadRequestException('value must be a boolean');
+    }
+    await this.settings.setFlag(name as FlagName, dto.value, user.id);
+    return { ok: true, name, value: dto.value };
+  }
+
+  @Patch('admin/settings/values/:name')
+  @Roles('admin')
+  async setValue(
+    @Param('name') name: string,
+    @Body() dto: { value: string | number },
+    @CurrentUser() user: RequestUser,
+  ) {
+    if (!(name in VALUE_REGISTRY)) {
+      throw new BadRequestException(`Unknown setting: ${name}`);
+    }
+    const def = VALUE_REGISTRY[name as ValueName];
+    if (def.type === 'number' && typeof dto?.value !== 'number') {
+      throw new BadRequestException(`${name} requires a number`);
+    }
+    if (def.type === 'string' && typeof dto?.value !== 'string') {
+      throw new BadRequestException(`${name} requires a string`);
+    }
+    await this.settings.setValue(
+      name as ValueName,
+      dto.value as ValueOf<ValueName>,
+      user.id,
+    );
+    return { ok: true, name, value: dto.value };
   }
 
   @Patch('admin/settings/branding')
@@ -281,15 +356,19 @@ export class SettingsController {
   @Get('admin/settings/invoice-template')
   @Roles('admin', 'staff')
   async getInvoiceTemplate() {
-    const current = await this.settings.getInvoiceTemplate();
+    const [current, branding] = await Promise.all([
+      this.settings.getInvoiceTemplate(),
+      this.settings.getBranding(),
+    ]);
+    const co = branding.company_name;
     return {
       current,
       defaults: {
         footer_comment: '',
         disclosure_buy:
-          'The seller certifies that all items presented are owned outright and are not stolen or subject to any legal claim. Seller agrees to indemnify and hold harmless Atlanta Gold and Coin from any disputes arising from ownership claims.',
+          `The seller certifies that all items presented are owned outright and are not stolen or subject to any legal claim. Seller agrees to indemnify and hold harmless ${co} from any disputes arising from ownership claims.`,
         disclosure_sell:
-          'Precious metals products are subject to market volatility. All sales are final once payment is confirmed. Atlanta Gold and Coin does not guarantee future market performance.',
+          `Precious metals products are subject to market volatility. All sales are final once payment is confirmed. ${co} does not guarantee future market performance.`,
       },
     };
   }

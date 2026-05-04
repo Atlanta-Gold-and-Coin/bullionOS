@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
+import { useSetting } from '@/lib/use-app-settings';
 
 // ===== Types mirroring the API response shapes =====
 
@@ -335,10 +336,12 @@ export default function NewLabelWizardPage() {
     enabled: Boolean(invoice?.client_id),
   });
 
-  // Auto-pick the AGC default sender once the list loads.
+  const senderMatch = useSetting('ifs.sender_match');
+
+  // Auto-pick the tenant's default sender once the list loads.
   useEffect(() => {
     if (!senderList?.senders.length || state.selected_sender_id) return;
-    const matched = pickAgcSender(senderList);
+    const matched = pickDefaultSender(senderList, senderMatch);
     if (matched) {
       void hydrateSender(matched.id);
     }
@@ -1646,21 +1649,25 @@ function stateAbbrev(input: string): string {
 }
 
 /**
- * Find the AGC default sender in the IFS-saved sender list. Matches
- * on company name ("Your ATL Taxidermy") since that's stable across
- * IFS-side address edits — the actual saved address moved between
- * Alpharetta and Duluth at one point. Falls back to the IFS-side
- * `primaric_id`, then to the first sender if nothing matches.
+ * Find the tenant's default sender in the IFS-saved sender list.
+ * Operators set `ifs.sender_match` in Settings to a stable substring
+ * (typically the company-name string IFS shows in its sender list);
+ * matching on that survives IFS-side address edits. Falls back to
+ * the IFS-side `primary_id`, then to the first sender if nothing
+ * matches (or the setting is empty).
  */
-function pickAgcSender(
+function pickDefaultSender(
   list: IfsSenderListResp,
+  matchString: string,
 ): IfsSenderListEntry | null {
-  const target = 'your atl taxidermy';
-  const byName = list.senders.find((s) => {
-    const haystack = `${s.text} ${s.name} ${s.company_name}`.toLowerCase();
-    return haystack.includes(target);
-  });
-  if (byName) return byName;
+  const target = matchString.trim().toLowerCase();
+  if (target.length > 0) {
+    const byName = list.senders.find((s) => {
+      const haystack = `${s.text} ${s.name} ${s.company_name}`.toLowerCase();
+      return haystack.includes(target);
+    });
+    if (byName) return byName;
+  }
   if (list.primary_id) {
     const byPrimary = list.senders.find((s) => s.id === list.primary_id);
     if (byPrimary) return byPrimary;

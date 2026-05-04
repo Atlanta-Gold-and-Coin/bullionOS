@@ -284,9 +284,9 @@ export class InvoicePdfService {
     const disclosureBody =
       invoice.type === 'buy'
         ? tpl.disclosure_buy ??
-          'The seller certifies that all items presented are owned outright and are not stolen or subject to any legal claim. Seller agrees to indemnify and hold harmless Atlanta Gold and Coin from any disputes arising from ownership claims.'
+          `The seller certifies that all items presented are owned outright and are not stolen or subject to any legal claim. Seller agrees to indemnify and hold harmless ${branding.company_name} from any disputes arising from ownership claims.`
         : tpl.disclosure_sell ??
-          'Precious metals products are subject to market volatility. All sales are final once payment is confirmed. Atlanta Gold and Coin does not guarantee future market performance.';
+          `Precious metals products are subject to market volatility. All sales are final once payment is confirmed. ${branding.company_name} does not guarantee future market performance.`;
 
     if (cursorY > 640) {
       doc.addPage();
