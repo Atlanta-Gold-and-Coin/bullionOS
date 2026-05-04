@@ -38,6 +38,7 @@ import { GmailModule } from './gmail/gmail.module';
 import { AurbitrageModule } from './aurbitrage/aurbitrage.module';
 import { IfsModule } from './ifs/ifs.module';
 import { EodReportsModule } from './eod-reports/eod-reports.module';
+import { ImportsModule } from './imports/imports.module';
 import { HealthController } from './health/health.controller';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -119,6 +120,7 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
     AurbitrageModule,
     IfsModule,
     EodReportsModule,
+    ImportsModule,
   ],
   controllers: [HealthController],
   providers: [
