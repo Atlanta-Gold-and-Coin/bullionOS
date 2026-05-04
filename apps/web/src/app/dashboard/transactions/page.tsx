@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api-client';
 import { StatusPill } from '@/components/status-pill';
+import { useAppSettings } from '@/lib/use-app-settings';
 
 interface InvoiceRow {
   id: string;
@@ -20,11 +21,13 @@ export default function ClientTransactions() {
     queryKey: ['client', 'invoices'],
     queryFn: () => apiFetch<InvoiceRow[]>('/client/invoices'),
   });
+  const { data: appSettings } = useAppSettings();
+  const brand = appSettings?.branding.company_name ?? 'us';
 
   return (
     <div className="mx-auto max-w-5xl">
       <h1 className="text-2xl font-semibold">Transactions</h1>
-      <p className="mt-1 text-sm text-ink-400">Your buy and sell history with AGC.</p>
+      <p className="mt-1 text-sm text-ink-400">Your buy and sell history with {brand}.</p>
 
       <div className="mt-6 overflow-hidden rounded-xl border border-ink-200 bg-white">
         {isLoading ? (

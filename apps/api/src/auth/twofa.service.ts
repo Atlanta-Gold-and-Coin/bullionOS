@@ -36,10 +36,11 @@ export class TwoFactorService {
     @Inject(KYSELY) private readonly db: Kysely<DB>,
     config: ConfigService,
   ) {
-    this.issuer = 'AGC CRM';
-    // Optional: tie issuer to hostname in prod. For now a static label keeps
-    // the QR consistent across environments.
-    void config;
+    // TOTP issuer string — appears in the user's authenticator app.
+    // Per-tenant override via TOTP_ISSUER env var so each operator's
+    // entry shows their company name (e.g. "Acme Coin"). Falls back
+    // to the meta-product name when unset.
+    this.issuer = config.get<string>('TOTP_ISSUER') ?? 'BullionOS';
   }
 
   /**

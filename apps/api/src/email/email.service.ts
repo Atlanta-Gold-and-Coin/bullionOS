@@ -52,7 +52,7 @@ export class EmailService implements OnModuleInit {
     const host = this.config.get<string>('SMTP_HOST', '');
     this.from = this.config.get<string>(
       'SMTP_FROM',
-      'AGC CRM <noreply@example.com>',
+      'BullionOS <noreply@example.com>',
     );
 
     if (host) {

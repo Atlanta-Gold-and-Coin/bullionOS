@@ -46,7 +46,7 @@ const SAMPLE_VARS: Record<string, string> = {
   type: 'sell',
   total: '4,821.50',
   status: 'paid',
-  company_name: 'Atlanta Gold & Coin',
+  company_name: 'Your Company',
 };
 
 export default function EmailTemplatesPage() {

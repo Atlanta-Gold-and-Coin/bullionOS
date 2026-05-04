@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
+import { useAppSettings, useSetting } from '@/lib/use-app-settings';
 
 interface CalendarEvent {
   id: string;
@@ -82,9 +83,9 @@ export default function AdminCalendarPage() {
         <div>
           <h1 className="text-2xl font-semibold">Calendar</h1>
           <p className="mt-1 text-sm text-ink-400">
-            Events on the Sales Google Calendar. Creating one here lands it
-            directly on <span className="font-mono">sales@atlantagoldandcoinbuyers.com</span>{' '}
-            and sends invites to any attendees.
+            Events on the connected Google Calendar. Creating one here lands
+            it on the configured calendar (Settings → Integrations → Google
+            Calendar) and sends invites to any attendees.
           </p>
         </div>
         <button
@@ -227,23 +228,26 @@ function EventRow({
  * re-fetch.
  */
 /**
- * Domains we treat as internal AGC staff — these attendees never
- * become CRM clients via auto-resolve. Customer-facing domains (gmail,
- * yahoo, outlook, proton, anything else) DO auto-create when the
- * calendar loads, so admins don't have to click "+ add" for every
- * externally-added event.
+ * Domains we treat as internal staff — these attendees never become
+ * CRM clients via auto-resolve. Customer-facing domains (gmail, yahoo,
+ * outlook, proton, anything else) DO auto-create when the calendar
+ * loads, so admins don't have to click "+ add" for every externally-
+ * added event. Configurable via Settings → `staff.email_domains`
+ * (comma-separated). Empty string = no domains marked as staff,
+ * so every attendee auto-creates.
  */
-const INTERNAL_DOMAINS = [
-  'atlantagoldandcoin.com',
-  'atlantagoldandcoinbuyers.com',
-  'agcdesk.com',
-];
+function parseStaffDomains(setting: string): string[] {
+  return setting
+    .split(',')
+    .map((d) => d.trim().toLowerCase())
+    .filter((d) => d.length > 0);
+}
 
-function isInternalEmail(email: string): boolean {
+function isInternalEmail(email: string, domains: string[]): boolean {
   const at = email.lastIndexOf('@');
   if (at < 0) return false;
   const domain = email.slice(at + 1).toLowerCase();
-  return INTERNAL_DOMAINS.includes(domain);
+  return domains.includes(domain);
 }
 
 function AttendeeChip({
@@ -252,12 +256,18 @@ function AttendeeChip({
   attendee: { email: string; name: string | null; responseStatus: string | null };
 }) {
   const qc = useQueryClient();
-  // Auto-create clients for EXTERNAL attendees on page load. Internal
-  // AGC staff stay in dry-run (read-only lookup) so the company's own
-  // sales@ / hunter@ / staff@ addresses don't get turned into CRM
-  // client rows. This closes the gap where events added via Google
-  // Calendar / Gmail / Calendly weren't creating clients.
-  const shouldAutoCreate = !isInternalEmail(attendee.email);
+  const staffDomainsSetting = useSetting('staff.email_domains');
+  const staffDomains = useMemo(
+    () => parseStaffDomains(staffDomainsSetting),
+    [staffDomainsSetting],
+  );
+  // Auto-create clients for EXTERNAL attendees on page load. Staff
+  // (matching `staff.email_domains` setting) stay in dry-run
+  // (read-only lookup) so the operator's own sales@ / accounting@
+  // addresses don't get turned into CRM client rows. This closes the
+  // gap where events added via Google Calendar / Gmail / Calendly
+  // weren't creating clients.
+  const shouldAutoCreate = !isInternalEmail(attendee.email, staffDomains);
   const { data, isLoading } = useQuery({
     queryKey: ['admin', 'client-lookup', attendee.email.toLowerCase()],
     queryFn: () =>
@@ -304,7 +314,7 @@ function AttendeeChip({
       apiFetch<Array<{ change_type: string; at: string; start_time: string | null }>>(
         `/admin/clients/${linkedClientId}/greminders-activity?limit=1`,
       ),
-    enabled: !!linkedClientId && !isInternalEmail(attendee.email),
+    enabled: !!linkedClientId && !isInternalEmail(attendee.email, staffDomains),
     staleTime: 60_000,
   });
   const latestGreminders = gremindersActivity?.[0] ?? null;

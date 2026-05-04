@@ -9,6 +9,7 @@ import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
 import type { DB, Message, MessageAuthorRole, UserRole } from '../db/types';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SettingsService } from '../settings/settings.service';
 
 export interface MessageView extends Message {
   author_name: string;
@@ -19,6 +20,7 @@ export class MessagesService {
   constructor(
     @Inject(KYSELY) private readonly db: Kysely<DB>,
     private readonly notifications: NotificationsService,
+    private readonly settings: SettingsService,
   ) {}
 
   /**
@@ -117,10 +119,11 @@ export class MessagesService {
         metadata: { deal_request_id: requestId, message_id: inserted.id },
       });
     } else if (client_user_id) {
+      const branding = await this.settings.getBranding();
       await this.notifications.create({
         user_id: client_user_id,
         type: 'message.new',
-        title: 'New message from AGC',
+        title: `New message from ${branding.company_name}`,
         body: trimmed.slice(0, 140),
         link: `/dashboard/requests`,
         metadata: { deal_request_id: requestId, message_id: inserted.id },

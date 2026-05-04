@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
+import { useAppSettings } from '@/lib/use-app-settings';
 
 interface Message {
   id: string;
@@ -26,6 +27,8 @@ export function MessageThread({
   requestId: string;
   viewerRole: 'admin' | 'staff' | 'client';
 }) {
+  const { data: appSettings } = useAppSettings();
+  const staffLabel = appSettings?.branding.company_name ?? 'Staff';
   const qc = useQueryClient();
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
@@ -126,7 +129,7 @@ export function MessageThread({
               >
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] uppercase tracking-wide opacity-70">
-                    {m.author_role === 'client' ? m.author_name : 'AGC'}
+                    {m.author_role === 'client' ? m.author_name : staffLabel}
                   </span>
                   <span className="text-[10px] opacity-50">
                     {new Date(m.created_at).toLocaleString()}

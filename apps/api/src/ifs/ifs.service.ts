@@ -1339,7 +1339,7 @@ export class IfsService {
         headers: {
           'content-type': 'application/x-www-form-urlencoded',
           accept: 'application/json',
-          'user-agent': 'AGC-Desk/1.0 (+https://agcdesk.com)',
+          'user-agent': 'BullionOS/1.0',
         },
         body: form.toString(),
         signal: controller.signal,

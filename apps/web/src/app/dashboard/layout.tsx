@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { NotificationsBell } from '@/components/notifications-bell';
+import { useAppSettings } from '@/lib/use-app-settings';
 
 /**
  * Client portal shell. Mirrors the admin layout's mobile drawer pattern:
@@ -120,19 +121,21 @@ function SidebarBody({
   onLogout: () => void;
   showAdmin: boolean;
 }) {
+  const { data: appSettings } = useAppSettings();
+  const brand = appSettings?.branding.company_name ?? 'BullionOS';
   return (
     <>
       <div className="flex items-center gap-2 px-2">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/api/v1/public/branding/logo"
-          alt="AGC"
+          alt={brand}
           className="h-7 w-7 rounded-md object-contain"
           onError={(e) => {
             (e.currentTarget as HTMLImageElement).style.display = 'none';
           }}
         />
-        <span className="font-semibold">AGC</span>
+        <span className="font-semibold">{brand}</span>
       </div>
 
       <nav className="mt-8 flex flex-col gap-1 text-sm">

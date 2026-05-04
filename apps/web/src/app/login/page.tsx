@@ -10,10 +10,12 @@ import {
   BullionOSHeroMark,
   BullionOSWordmark,
 } from '@/components/bullion-os-logo';
+import { useAppSettings } from '@/lib/use-app-settings';
 
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
+  const { data: appSettings } = useAppSettings();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -47,11 +49,10 @@ export default function LoginPage() {
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-bos-black px-4 py-12">
-      {/* BullionOS hero mark + wordmark — replaces the per-instance
-          AGC branding logo on the login surface. The mark is fully
-          inline SVG so it scales sharp + lives without an asset
-          upload step. AGC branding still appears post-login on the
-          admin shell + invoice PDFs as before. */}
+      {/* BullionOS hero mark + wordmark — the inline SVG identity for
+          the meta-product. Per-tenant branding (the operator's company
+          name, logo, etc.) still appears post-login on the admin shell
+          and invoice PDFs. */}
       <div className="mb-8 flex flex-col items-center">
         <BullionOSHeroMark size={140} />
         <div className="mt-4">
@@ -63,7 +64,7 @@ export default function LoginPage() {
         <div className="mb-6">
           <h1 className="text-xl font-semibold text-white">Sign in</h1>
           <p className="mt-1 text-sm text-bos-mute">
-            Atlanta Gold &amp; Coin · Operator portal
+            {appSettings?.branding.company_name ?? 'BullionOS'} · Operator portal
           </p>
         </div>
 

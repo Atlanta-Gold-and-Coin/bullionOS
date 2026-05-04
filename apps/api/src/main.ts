@@ -70,7 +70,7 @@ async function bootstrap() {
   const port = config.get<number>('PORT', 4000);
   await app.listen(port, '0.0.0.0');
   // eslint-disable-next-line no-console
-  console.log(`\n🚀 AGC API listening on http://localhost:${port}/api/v1`);
+  console.log(`\n🚀 BullionOS API listening on http://localhost:${port}/api/v1`);
 }
 
 bootstrap().catch((err) => {

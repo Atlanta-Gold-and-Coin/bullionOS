@@ -453,7 +453,7 @@ export class CalendarService {
     }
 
     const descriptionLines = [
-      `Booked via AGC Desk`,
+      `Booked via online appointment form`,
       `Name:  ${req.name}`,
       `Email: ${req.email}`,
       req.phone ? `Phone: ${req.phone}` : null,

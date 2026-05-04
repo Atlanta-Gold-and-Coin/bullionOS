@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
+import { useAppSettings } from '@/lib/use-app-settings';
 
 interface PublicConfig {
   configured: boolean;
@@ -45,6 +46,8 @@ const APPRAISAL_DISCLAIMER =
   'Please note, Appraisals that do not result in the sale of at least 50% of the collection\u2019s value (no obligation) are billed at $350/hr with a minimum of 1 hour.';
 
 export default function BookPage() {
+  const { data: appSettings } = useAppSettings();
+  const branding = appSettings?.branding;
   const { data: config, isLoading, isError } = useQuery({
     queryKey: ['public', 'calendar', 'config'],
     queryFn: () => apiFetch<PublicConfig>('/public/calendar/config'),
@@ -140,12 +143,15 @@ export default function BookPage() {
     return <Shell><p className="text-sm text-ink-400">Loading…</p></Shell>;
   }
   if (isError || !config || !config.configured) {
+    const phone = branding?.phone;
+    const website = branding?.website;
     return (
       <Shell>
         <p className="text-sm text-ink-600">
-          Online booking is being set up. Please call us at 404-236-9744 or
-          email sales@atlantagoldandcoinbuyers.com and we&rsquo;ll schedule you
-          directly.
+          Online booking is being set up. Please contact us
+          {phone ? <> at {phone}</> : null}
+          {website ? <> or visit {website}</> : null}
+          {' '}and we&rsquo;ll schedule you directly.
         </p>
       </Shell>
     );
@@ -447,13 +453,24 @@ function resolveServiceLabel(
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
+  // Shell is rendered both on the loading path AND the error path,
+  // so it pulls branding itself rather than relying on the parent
+  // BookPage having reached its body. useAppSettings is cached.
+  const { data: appSettings } = useAppSettings();
+  const branding = appSettings?.branding;
   return (
     <main className="mx-auto max-w-2xl px-4 py-10">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold">Book an appointment</h1>
         <p className="mt-1 text-sm text-ink-400">
-          Atlanta Gold and Coin · 8480 Holcomb Bridge Rd #200 · Alpharetta, GA ·
-          404-236-9744
+          {[
+            branding?.company_name,
+            branding?.address_line1,
+            branding?.address_city_state_zip,
+            branding?.phone,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         </p>
       </header>
       {children}

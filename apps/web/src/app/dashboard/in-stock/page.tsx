@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api-client';
 import { rankProducts } from '@/lib/product-search';
+import { useAppSettings } from '@/lib/use-app-settings';
 
 interface InStockItem {
   product_id: string;
@@ -21,6 +22,8 @@ export default function ClientInStockPage() {
     queryFn: () => apiFetch<InStockItem[]>('/client/in-stock'),
     refetchInterval: 60_000,
   });
+  const { data: appSettings } = useAppSettings();
+  const brand = appSettings?.branding.company_name ?? 'us';
 
   const filtered = useMemo(
     () => rankProducts(data ?? [], search),
@@ -31,7 +34,7 @@ export default function ClientInStockPage() {
     <div className="mx-auto max-w-5xl">
       <h1 className="text-2xl font-semibold">In stock</h1>
       <p className="mt-1 text-sm text-ink-400">
-        Items currently available from AGC. Contact us to purchase.
+        Items currently available from {brand}. Contact us to purchase.
       </p>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">

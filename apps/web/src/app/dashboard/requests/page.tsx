@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError, getAccessToken } from '@/lib/api-client';
 import { MessageThread } from '@/components/message-thread';
+import { useAppSettings } from '@/lib/use-app-settings';
 
 interface Product {
   id: string;
@@ -28,6 +29,8 @@ interface DealRequest {
 
 export default function ClientRequests() {
   const qc = useQueryClient();
+  const { data: appSettings } = useAppSettings();
+  const brand = appSettings?.branding.company_name ?? 'us';
   const { data: products } = useQuery({
     queryKey: ['client', 'products'],
     queryFn: () => apiFetch<Product[]>('/public/products'),
@@ -41,7 +44,7 @@ export default function ClientRequests() {
     <div className="mx-auto max-w-4xl">
       <h1 className="text-2xl font-semibold">Requests</h1>
       <p className="mt-1 text-sm text-ink-400">
-        Submit a request to buy from or sell to AGC. Attach photos for pre-evaluation.
+        Submit a request to buy from or sell to {brand}. Attach photos for pre-evaluation.
       </p>
 
       <RequestForm
@@ -343,6 +346,8 @@ function AuthImage({ url }: { url: string }) {
 }
 
 function RequestRow({ req, products }: { req: DealRequest; products: Product[] }) {
+  const { data: appSettings } = useAppSettings();
+  const brand = appSettings?.branding.company_name ?? 'Staff';
   return (
     <div className="rounded-xl border border-ink-200 bg-white p-4">
       <div className="flex items-start justify-between">
@@ -364,7 +369,7 @@ function RequestRow({ req, products }: { req: DealRequest; products: Product[] }
           {req.notes && <p className="mt-1 text-xs text-ink-600">“{req.notes}”</p>}
           {req.response_message && (
             <div className="mt-2 rounded bg-ink-50 px-2 py-1 text-xs text-ink-700">
-              <span className="font-medium">AGC:</span> {req.response_message}
+              <span className="font-medium">{brand}:</span> {req.response_message}
             </div>
           )}
         </div>

@@ -301,7 +301,7 @@ export class AurbitrageService {
         headers: {
           'x-api-key': creds.api_key,
           accept: 'application/json',
-          'user-agent': 'AGC-Desk/1.0 (+https://agcdesk.com)',
+          'user-agent': 'BullionOS/1.0',
         },
         signal: controller.signal,
       });

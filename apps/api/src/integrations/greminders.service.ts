@@ -5,6 +5,7 @@ import { KYSELY } from '../db/database.module';
 import type { DB } from '../db/types';
 import { ClientsService } from '../clients/clients.service';
 import { IntegrationsService } from './integrations.service';
+import { SettingsService } from '../settings/settings.service';
 
 /**
  * Known GReminders webhook payload shape.
@@ -56,6 +57,7 @@ export class GremindersService {
     @Inject(KYSELY) private readonly db: Kysely<DB>,
     private readonly integrations: IntegrationsService,
     private readonly clients: ClientsService,
+    private readonly settings: SettingsService,
   ) {}
 
   /**
@@ -272,11 +274,18 @@ export class GremindersService {
       return { ok: false, client_id: null, client_created: false, skipped_reason: 'no data' };
     }
 
+    const staffDomainsSetting = await this.settings.getValue('staff.email_domains');
+    const staffDomains = new Set(
+      staffDomainsSetting
+        .split(',')
+        .map((d) => d.trim().toLowerCase())
+        .filter((d) => d.length > 0),
+    );
     const attendees = (data.attendees ?? data.invitees ?? []).filter(Boolean);
     const customer = attendees.find((a) => {
       const email = (a.email ?? '').toLowerCase();
       if (!email) return false;
-      return !isInternalEmail(email);
+      return !isInternalEmailWith(email, staffDomains);
     });
     if (!customer || !customer.email) {
       return {
@@ -342,18 +351,14 @@ export class GremindersService {
 }
 
 /**
- * AGC internal staff domains — attendees on these addresses are the
- * operator, not the booking customer. Mirrors the list in the calendar
- * auto-create fix (commit 20e15e2) so the semantics stay aligned.
+ * Tenant staff domains — attendees on these addresses are the
+ * operator, not the booking customer. Driven by the
+ * `staff.email_domains` setting (comma-separated list); empty
+ * setting = no domains marked as staff, so every attendee is
+ * treated as an external customer.
  */
-const INTERNAL_DOMAINS = new Set([
-  'atlantagoldandcoin.com',
-  'atlantagoldandcoinbuyers.com',
-  'agcdesk.com',
-]);
-
-function isInternalEmail(email: string): boolean {
+function isInternalEmailWith(email: string, domains: Set<string>): boolean {
   const at = email.lastIndexOf('@');
   if (at < 0) return false;
-  return INTERNAL_DOMAINS.has(email.slice(at + 1).toLowerCase());
+  return domains.has(email.slice(at + 1).toLowerCase());
 }

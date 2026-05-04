@@ -300,7 +300,7 @@ function BrandingForm({
             {...field('website')}
             className="input mt-1"
             maxLength={120}
-            placeholder="atlantagoldandcoin.com"
+            placeholder="yourcompany.com"
           />
         </label>
       </div>

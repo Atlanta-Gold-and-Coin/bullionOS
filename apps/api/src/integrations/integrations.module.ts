@@ -18,6 +18,7 @@ import { ClientsModule } from '../clients/clients.module';
 import { GmailModule } from '../gmail/gmail.module';
 import { AurbitrageModule } from '../aurbitrage/aurbitrage.module';
 import { IfsModule } from '../ifs/ifs.module';
+import { SettingsModule } from '../settings/settings.module';
 
 // Global: many feature modules will inject CarrierService/DocuSignService.
 // Imports MetalsModule because IntegrationsController needs MetalsService
@@ -44,6 +45,7 @@ import { IfsModule } from '../ifs/ifs.module';
     forwardRef(() => GmailModule),
     forwardRef(() => AurbitrageModule),
     forwardRef(() => IfsModule),
+    SettingsModule,
   ],
   controllers: [
     IntegrationsController,

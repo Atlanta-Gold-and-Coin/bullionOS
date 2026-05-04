@@ -27,6 +27,7 @@ export interface ValueShape {
   'ifs.sender_match': string;
   'eod_report.from_email': string;
   'app.url': string;
+  'staff.email_domains': string;
 }
 
 export interface BrandingPayload {
@@ -85,6 +86,7 @@ export function useSetting<K extends keyof ValueShape>(name: K): ValueShape[K] {
       'ifs.sender_match': '',
       'eod_report.from_email': '',
       'app.url': '',
+      'staff.email_domains': '',
     };
     return fallback[name];
   }

@@ -3,10 +3,10 @@
  * email + password. Use when an admin loses their authenticator device.
  *
  * Usage (from repo root):
- *   pnpm --filter @agc/api exec tsx src/db/disable-2fa.ts hunter@atlantagoldandcoin.com
+ *   pnpm --filter @agc/api exec tsx src/db/disable-2fa.ts user@example.com
  *
  * Against Railway:
- *   railway run --service agc-api pnpm --filter @agc/api exec tsx src/db/disable-2fa.ts hunter@atlantagoldandcoin.com
+ *   railway run --service api pnpm --filter @agc/api exec tsx src/db/disable-2fa.ts user@example.com
  *
  * What it does:
  *   1. Finds the user by email

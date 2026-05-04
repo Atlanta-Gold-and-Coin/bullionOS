@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { SpotTicker } from '@/components/spot-ticker';
 import { NotificationsBell } from '@/components/notifications-bell';
+import { useAppSettings } from '@/lib/use-app-settings';
 import {
   BullionOSLogo,
   BullionOSWordmark,
@@ -143,6 +144,7 @@ const NAV_ITEMS: NavEntry[] = [
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth();
+  const { data: appSettings } = useAppSettings();
   const router = useRouter();
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -270,6 +272,9 @@ function SidebarBody({
   /** Active route — used to auto-expand the matching nav group. */
   pathname: string;
 }) {
+  // useAppSettings is cached by react-query — calling it here re-uses
+  // the same fetch the parent layout kicked off.
+  const { data: appSettings } = useAppSettings();
   return (
     <>
       <div className="flex items-center gap-2 px-2">
@@ -280,7 +285,7 @@ function SidebarBody({
             <span className="text-gold-400">OS</span>
           </div>
           <div className="text-[10px] uppercase tracking-wide text-bos-mute">
-            AGC Desk · Admin
+            {appSettings?.branding.company_name ?? 'BullionOS Desk'} · Admin
           </div>
         </div>
       </div>

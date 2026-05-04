@@ -90,6 +90,12 @@ export const VALUE_REGISTRY = {
     description:
       'Canonical public app URL (e.g. https://desk.acmecoin.com). Used in email/PDF deep-links. When empty, links fall back to relative paths.',
   },
+  'staff.email_domains': {
+    type: 'string',
+    default: '',
+    description:
+      'Comma-separated list of email domains your staff use (e.g. "yourcoin.com,yourcoinbuyers.com"). Used to mark staff vs. external attendees in calendar bookings and reminder logic. Empty = no domains treated as staff.',
+  },
 } as const satisfies Record<string, ValueDef>;
 
 export type ValueName = keyof typeof VALUE_REGISTRY;

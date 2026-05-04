@@ -476,7 +476,7 @@ export class GmailService {
           // Some hosts reject requests without a User-Agent; mimic a
           // generic browser so Mailchimp/Cloudflare edges treat us
           // like an ordinary PDF download.
-          'User-Agent': 'AGC-Desk/1.0 (+https://agcdesk.com)',
+          'User-Agent': 'BullionOS/1.0',
         },
       });
       if (!res.ok) {

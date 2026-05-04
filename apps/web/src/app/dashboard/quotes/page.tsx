@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api-client';
+import { useAppSettings } from '@/lib/use-app-settings';
 
 /**
  * Client-facing shape for a locked quote. Intentionally *does not*
@@ -31,12 +32,14 @@ export default function ClientQuotesPage() {
     queryFn: () => apiFetch<Quote[]>('/client/quotes'),
     refetchInterval: 30_000,
   });
+  const { data: appSettings } = useAppSettings();
+  const brand = appSettings?.branding.company_name ?? 'us';
 
   return (
     <div className="mx-auto max-w-5xl">
       <h1 className="text-2xl font-semibold">Locked-in quotes</h1>
       <p className="mt-1 text-sm text-ink-400">
-        Prices we agreed to hold for 15 minutes. Convert to a transaction by contacting AGC.
+        Prices we agreed to hold for 15 minutes. Convert to a transaction by contacting {brand}.
       </p>
 
       <div className="mt-6 overflow-hidden rounded-xl border border-ink-200 bg-white">

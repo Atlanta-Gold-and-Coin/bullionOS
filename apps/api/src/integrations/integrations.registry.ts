@@ -138,7 +138,7 @@ const gmailCreds = z.object({
   // Mailbox to poll — informational, matches the account that consents.
   // 'me' works at the API level but the literal email makes this row
   // self-describing.
-  mailbox_email: z.string().email().default('sales@atlantagoldandcoinbuyers.com'),
+  mailbox_email: z.string().email().default('sales@example.com'),
   // Populated by the OAuth callback after the one-time user consent.
   refresh_token: z.string().max(1000).default(''),
   // Gmail search operator for the sender. The RARCOA daily sheet

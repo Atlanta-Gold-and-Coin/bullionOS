@@ -342,8 +342,8 @@ export default function ScrapInvoicePage() {
         </div>
         <span className="text-[11px] text-ink-400">
           {type === 'buy'
-            ? 'Default — AGC purchases scrap from the client.'
-            : 'Rare — AGC sells scrap to the client.'}
+            ? 'Default — you purchase scrap from the client.'
+            : 'Rare — you sell scrap to the client.'}
         </span>
       </div>
 

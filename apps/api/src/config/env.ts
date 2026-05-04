@@ -14,23 +14,17 @@ const envSchema = z.object({
   WEB_ORIGIN: z.string().url(),
   /**
    * Comma-separated list of additional origins allowed to call the
-   * `@Public()` endpoints cross-origin — the WordPress plugin lives
-   * on atlantagoldandcoin.com and the browser was blocking its
-   * restock-notify POSTs without the site listed here.
+   * `@Public()` endpoints cross-origin — typically the operator's
+   * marketing site / WordPress install when the public buy-rate or
+   * in-stock widgets are embedded there.
    *
-   * Default bakes in the canonical AGC WP origins so the feature
-   * works out of the box on a fresh Railway deploy. Override via
-   * env var when spinning up additional public consumers:
+   * Empty by default. Override via env var when spinning up public
+   * consumers:
    *   PUBLIC_ORIGINS=https://example.com,https://www.example.com
    * main.ts parses + merges these into the CORS origin allowlist
    * alongside WEB_ORIGIN.
    */
-  PUBLIC_ORIGINS: z
-    .string()
-    .optional()
-    .default(
-      'https://atlantagoldandcoin.com,https://www.atlantagoldandcoin.com',
-    ),
+  PUBLIC_ORIGINS: z.string().optional().default(''),
 
   DATABASE_URL: z.string().url(),
   DATABASE_POOL_MAX: z.coerce.number().int().positive().default(20),
@@ -71,7 +65,10 @@ const envSchema = z.object({
   SMTP_PORT: z.coerce.number().int().optional().default(587),
   SMTP_USER: z.string().optional().default(''),
   SMTP_PASS: z.string().optional().default(''),
-  SMTP_FROM: z.string().optional().default('AGC CRM <noreply@example.com>'),
+  SMTP_FROM: z.string().optional().default('BullionOS <noreply@example.com>'),
+
+  /** TOTP issuer label — appears in the user's authenticator app. */
+  TOTP_ISSUER: z.string().optional(),
 
   TWILIO_ACCOUNT_SID: z.string().optional().default(''),
   TWILIO_AUTH_TOKEN: z.string().optional().default(''),
