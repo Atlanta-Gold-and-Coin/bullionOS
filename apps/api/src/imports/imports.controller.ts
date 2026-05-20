@@ -27,6 +27,7 @@ const MAX_BYTES = 10 * 1024 * 1024;
  * Admin-only CSV imports.
  *
  *   POST /admin/imports/products?dry_run=true|false
+ *   POST /admin/imports/inventory?dry_run=true|false
  *   POST /admin/imports/clients?dry_run=true|false
  *   POST /admin/imports/historical-invoices?dry_run=true|false
  *
@@ -54,6 +55,24 @@ export class ImportsController {
     @CurrentUser() user: RequestUser,
   ) {
     return this.imports.importProducts(this.read(file), {
+      dryRun: parseDryRun(dryRunQ),
+      actorUserId: user.id,
+    });
+  }
+
+  @Post('inventory')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_BYTES, files: 1 },
+    }),
+  )
+  async inventory(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Query('dry_run') dryRunQ: string | undefined,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.imports.importInventory(this.read(file), {
       dryRun: parseDryRun(dryRunQ),
       actorUserId: user.id,
     });

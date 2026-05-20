@@ -14,6 +14,8 @@ import type {
   InvoiceStatus,
   InvoiceType,
   PaymentMethod,
+  ShipmentCarrier,
+  ShipmentStatus,
   UserRole,
 } from '../db/types';
 import { d, toDbString, Decimal } from '../common/money';
@@ -24,6 +26,7 @@ import { InventoryService } from '../inventory/inventory.service';
 import { EmailService } from '../email/email.service';
 import { SettingsService } from '../settings/settings.service';
 import { RestockService } from '../restock/restock.service';
+import { trackingUrlFor } from '../shipments/shipments.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 import type { CreateInvoiceDto } from './dto/create-invoice.dto';
 
@@ -41,6 +44,14 @@ export interface InvoiceWithLines extends Invoice {
   /** Email of the creator — fallback identifier on the detail page. */
   created_by_email?: string | null;
   line_items: InvoiceLineItem[];
+  shipments: Array<{
+    id: string;
+    carrier: ShipmentCarrier;
+    tracking_number: string | null;
+    tracking_url: string | null;
+    status: ShipmentStatus;
+    delivery_speed: string | null;
+  }>;
 }
 
 interface Actor {
@@ -228,6 +239,18 @@ export class InvoicesService {
       .where('invoice_id', '=', id)
       .orderBy('position')
       .execute();
+    const shipments = await this.db
+      .selectFrom('shipments')
+      .select([
+        'id',
+        'carrier',
+        'tracking_number',
+        'status',
+        'delivery_speed',
+      ])
+      .where('invoice_id', '=', id)
+      .orderBy('created_at')
+      .execute();
 
     return {
       ...(invoice as Invoice & {
@@ -241,6 +264,10 @@ export class InvoicesService {
         created_by_email: string | null;
       }),
       line_items: lines,
+      shipments: shipments.map((shipment) => ({
+        ...shipment,
+        tracking_url: trackingUrlFor(shipment.carrier, shipment.tracking_number),
+      })),
     };
   }
 
@@ -504,6 +531,7 @@ export class InvoicesService {
         client_email: string | null;
       }),
       line_items: lines,
+      shipments: [],
     };
   }
 

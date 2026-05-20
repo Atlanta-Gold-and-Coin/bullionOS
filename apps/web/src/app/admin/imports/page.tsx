@@ -7,8 +7,8 @@ import { getAccessToken } from '@/lib/api-client';
 /**
  * Admin → Imports
  *
- * CSV bulk import for the three entity types operators typically
- * onboard from a prior system: products, clients, historical
+ * CSV bulk import for the entities operators typically onboard from
+ * a prior system: products, inventory counts, clients, historical
  * invoices. Two-step flow per importer:
  *
  *   1. Pick a CSV → POST with ?dry_run=true → preview pane shows
@@ -22,7 +22,7 @@ import { getAccessToken } from '@/lib/api-client';
  * runtime failure mid-batch rolls back.
  */
 
-type ImportKind = 'products' | 'clients' | 'historical-invoices';
+type ImportKind = 'products' | 'inventory' | 'clients' | 'historical-invoices';
 
 interface ImportResult {
   total: number;
@@ -43,6 +43,13 @@ const KIND_META: Record<
       'sku, name, metal, category, weight_troy_oz, purity, description, is_active, show_on_website',
     example:
       'sku,name,metal,category,weight_troy_oz,purity\nAU-EAGLE-1,1 oz American Gold Eagle,gold,coin,1,0.9167\nAG-MAPLE-1,1 oz Silver Maple Leaf,silver,coin,1,0.9999',
+  },
+  inventory: {
+    label: 'Inventory',
+    columns:
+      'sku, quantity_on_hand, location, weighted_avg_cost, last_purchase_price, notes',
+    example:
+      'sku,quantity_on_hand,location,weighted_avg_cost,last_purchase_price,notes\nAU-EAGLE-1,5,Main Safe,2350.00,2400.00,opening count\nAG-MAPLE-1,40,Showcase,31.25,32.00,cycle count',
   },
   clients: {
     label: 'Clients',
@@ -72,6 +79,7 @@ export default function ImportsPage() {
       </p>
 
       <ImporterCard kind="products" />
+      <ImporterCard kind="inventory" />
       <ImporterCard kind="clients" />
       <ImporterCard kind="historical-invoices" />
     </div>
@@ -127,6 +135,8 @@ function ImporterCard({ kind }: { kind: ImportKind }) {
         // Invalidate any list views that might surface the freshly
         // imported rows.
         qc.invalidateQueries({ queryKey: ['admin', 'products'] });
+        qc.invalidateQueries({ queryKey: ['admin', 'inventory'] });
+        qc.invalidateQueries({ queryKey: ['admin', 'products', 'sheet'] });
         qc.invalidateQueries({ queryKey: ['admin', 'clients'] });
         qc.invalidateQueries({ queryKey: ['admin', 'historical-invoices'] });
       }

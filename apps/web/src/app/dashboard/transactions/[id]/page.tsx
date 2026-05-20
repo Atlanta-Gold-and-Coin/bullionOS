@@ -28,6 +28,14 @@ interface InvoiceDetail {
   created_at: string;
   notes: string | null;
   line_items: LineItem[];
+  shipments?: Array<{
+    id: string;
+    carrier: string;
+    tracking_number: string | null;
+    tracking_url: string | null;
+    status: string;
+    delivery_speed: string | null;
+  }>;
 }
 
 export default function ClientInvoiceDetail({
@@ -114,6 +122,43 @@ export default function ClientInvoiceDetail({
           <Row label="Total" value={data.total} bold />
         </div>
       </section>
+
+      {data.shipments && data.shipments.length > 0 && (
+        <section className="mt-6 rounded-xl border border-ink-200 bg-white p-5">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+            Shipment
+          </h2>
+          <div className="mt-3 space-y-3">
+            {data.shipments.map((shipment) => (
+              <div key={shipment.id} className="text-sm">
+                <p className="font-medium text-ink-900">
+                  {shipment.carrier.toUpperCase()}
+                  {shipment.delivery_speed ? ` · ${shipment.delivery_speed}` : ''}
+                </p>
+                {shipment.tracking_number ? (
+                  shipment.tracking_url ? (
+                    <a
+                      href={shipment.tracking_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-mono text-ink-700 underline decoration-ink-300 underline-offset-2 hover:text-ink-900"
+                    >
+                      {shipment.tracking_number}
+                    </a>
+                  ) : (
+                    <p className="font-mono text-ink-700">{shipment.tracking_number}</p>
+                  )
+                ) : (
+                  <p className="text-ink-400">Tracking pending</p>
+                )}
+                <p className="mt-1 text-xs text-ink-400">
+                  {shipment.status.replace(/_/g, ' ')}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {data.notes && (
         <section className="mt-6 rounded-xl border border-ink-200 bg-white p-5">
