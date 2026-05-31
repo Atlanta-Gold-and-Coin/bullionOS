@@ -36,3 +36,5 @@ apps/api/uploads/
 /tmp/
 
 .claude/
+
+.vercel
