@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, keepPreviousData, useQueryClient } from '@tanstack/react-query';
-import { apiFetch, ApiError } from '@/lib/api-client';
+import { apiFetch, ApiError, getAccessToken } from '@/lib/api-client';
 
 interface ClientRow {
   id: string;
@@ -28,6 +28,13 @@ interface ClientRow {
 }
 
 type Tab = 'retail' | 'wholesaler' | 'all';
+type ExportHistoryFilter =
+  | 'all'
+  | 'bought_from_us'
+  | 'sold_to_us'
+  | 'bought_or_sold'
+  | 'bought_and_sold'
+  | 'no_history';
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'all', label: 'All' },
@@ -37,11 +44,22 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'wholesaler', label: 'Wholesale' },
 ];
 
+const EXPORT_FILTERS: Array<{ id: ExportHistoryFilter; label: string }> = [
+  { id: 'all', label: 'All selected' },
+  { id: 'bought_from_us', label: 'Bought from us' },
+  { id: 'sold_to_us', label: 'Sold to us' },
+  { id: 'bought_or_sold', label: 'Bought or sold' },
+  { id: 'bought_and_sold', label: 'Bought and sold' },
+  { id: 'no_history', label: 'No buy/sell history' },
+];
+
 export default function ClientsListPage() {
   const qc = useQueryClient();
   const [q, setQ] = useState('');
   const [tab, setTab] = useState<Tab>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [exportFilter, setExportFilter] = useState<ExportHistoryFilter>('all');
+  const [exporting, setExporting] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkResult, setBulkResult] = useState<string | null>(null);
 
@@ -115,6 +133,49 @@ export default function ClientsListPage() {
     }
   }
 
+  async function exportSelected() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    setBulkError(null);
+    setBulkResult(null);
+    setExporting(true);
+    try {
+      const token = getAccessToken();
+      const res = await fetch('/api/v1/admin/clients/export', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ ids, history_filter: exportFilter }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(
+          body && typeof body === 'object' && 'message' in body
+            ? String((body as { message: unknown }).message)
+            : `Export failed (${res.status})`,
+        );
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') ?? '';
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      const filename = match?.[1] ?? 'agc-clients-export.csv';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setBulkResult(`Exported ${ids.length} selected client${ids.length === 1 ? '' : 's'}.`);
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-6xl">
       <div className="flex items-center justify-between">
@@ -167,10 +228,29 @@ export default function ClientsListPage() {
           className="input md:w-96"
         />
         {selected.size > 0 && (
-          <div className="flex items-center gap-2 rounded-md border border-ink-200 bg-white px-3 py-1 text-sm">
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-ink-200 bg-white px-3 py-1 text-sm">
             <span className="text-ink-600">
               {selected.size} selected
             </span>
+            <select
+              value={exportFilter}
+              onChange={(e) => setExportFilter(e.target.value as ExportHistoryFilter)}
+              className="rounded-md border border-ink-200 bg-white px-2 py-1 text-xs text-ink-700"
+              aria-label="Export history filter"
+            >
+              {EXPORT_FILTERS.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={exportSelected}
+              disabled={exporting}
+              className="rounded-md bg-ink-900 px-3 py-1 text-xs font-medium text-white hover:bg-ink-800 disabled:opacity-60"
+            >
+              {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
             <button
               onClick={bulkDelete}
               className="rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700"

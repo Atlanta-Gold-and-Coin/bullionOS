@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
 import type { DB, Metal, ProductCategory } from '../db/types';
+import { PublicCacheService } from '../public/public-cache.service';
 import { parseCsv } from './csv-parser';
 
 /**
@@ -46,7 +47,10 @@ const VALID_CATEGORIES: ProductCategory[] = [
 export class ImportsService {
   private readonly logger = new Logger(ImportsService.name);
 
-  constructor(@Inject(KYSELY) private readonly db: Kysely<DB>) {}
+  constructor(
+    @Inject(KYSELY) private readonly db: Kysely<DB>,
+    private readonly cache: PublicCacheService,
+  ) {}
 
   /**
    * Products import.
@@ -170,6 +174,229 @@ export class ImportsService {
       });
       this.logger.log(
         `Products import: ${valid.length}/${records.length} rows committed (actor=${opts.actorUserId ?? 'unknown'})`,
+      );
+    }
+
+    result.ok = valid.length;
+    result.skipped = result.errors.length;
+    return result;
+  }
+
+  /**
+   * Inventory import.
+   *
+   * Required columns: sku, quantity_on_hand
+   * Accepted aliases for quantity_on_hand: on_hand, quantity, qty
+   * Optional columns: location, weighted_avg_cost, last_purchase_price, notes
+   *
+   * Quantities are absolute counts, not deltas. On commit, each row
+   * moves the current inventory count to the imported quantity and
+   * writes an adjustment movement for the difference. Existing product
+   * SKUs are required; use the Products import first for brand-new SKUs.
+   */
+  async importInventory(
+    csv: string,
+    opts: { dryRun: boolean; actorUserId: string | null },
+  ): Promise<ImportResult> {
+    const records = parseCsv(csv);
+    const result: ImportResult = {
+      total: records.length,
+      ok: 0,
+      skipped: 0,
+      errors: [],
+      preview: [],
+      dryRun: opts.dryRun,
+    };
+
+    const seen = new Set<string>();
+    const inputSkus: string[] = [];
+    for (let i = 0; i < records.length; i++) {
+      const sku = readCell(records[i], ['sku', 'SKU'])?.trim().toUpperCase();
+      if (!sku) {
+        result.errors.push({
+          row: i + 2,
+          error: 'missing sku',
+          raw: records[i],
+        });
+        continue;
+      }
+      if (seen.has(sku)) {
+        result.errors.push({
+          row: i + 2,
+          error: `duplicate sku "${sku}" in this CSV`,
+          raw: records[i],
+        });
+        continue;
+      }
+      seen.add(sku);
+      inputSkus.push(sku);
+    }
+
+    const products =
+      inputSkus.length > 0
+        ? await this.db
+            .selectFrom('products as p')
+            .leftJoin('inventory as inv', 'inv.product_id', 'p.id')
+            .select([
+              'p.id',
+              'p.sku',
+              'p.name',
+              sql<number>`coalesce(inv.quantity_on_hand, 0)`.as(
+                'quantity_on_hand',
+              ),
+              sql<number>`coalesce(inv.quantity_reserved, 0)`.as(
+                'quantity_reserved',
+              ),
+              sql<string>`coalesce(inv.location, 'main')`.as('location'),
+            ])
+            .where('p.sku', 'in', inputSkus as [string, ...string[]])
+            .execute()
+        : [];
+    const productBySku = new Map(products.map((p) => [p.sku.toUpperCase(), p]));
+
+    const valid: Array<{
+      sku: string;
+      product_id: string;
+      name: string;
+      quantity_on_hand: number;
+      current_on_hand: number;
+      quantity_reserved: number;
+      delta: number;
+      location: string | null;
+      weighted_avg_cost: string | null;
+      last_purchase_price: string | null;
+      notes: string | null;
+    }> = [];
+
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i];
+      const sku = readCell(r, ['sku', 'SKU'])?.trim().toUpperCase();
+      if (!sku || result.errors.some((e) => e.row === i + 2)) continue;
+
+      const product = productBySku.get(sku);
+      if (!product) {
+        result.errors.push({
+          row: i + 2,
+          error: `sku "${sku}" does not exist; import products first`,
+          raw: r,
+        });
+        continue;
+      }
+
+      const quantityRaw = readCell(r, [
+        'quantity_on_hand',
+        'on_hand',
+        'quantity',
+        'qty',
+      ]);
+      const quantity = parseWholeNumber(quantityRaw);
+      if (quantity === null) {
+        result.errors.push({
+          row: i + 2,
+          error: `quantity_on_hand must be a whole number (got "${quantityRaw ?? ''}")`,
+          raw: r,
+        });
+        continue;
+      }
+      if (quantity < product.quantity_reserved) {
+        result.errors.push({
+          row: i + 2,
+          error: `quantity_on_hand (${quantity}) cannot be below reserved quantity (${product.quantity_reserved})`,
+          raw: r,
+        });
+        continue;
+      }
+
+      valid.push({
+        sku,
+        product_id: product.id,
+        name: product.name,
+        quantity_on_hand: quantity,
+        current_on_hand: product.quantity_on_hand,
+        quantity_reserved: product.quantity_reserved,
+        delta: quantity - product.quantity_on_hand,
+        location: normalizeLocation(readCell(r, ['location'])),
+        weighted_avg_cost: parseMoney(readCell(r, ['weighted_avg_cost'])),
+        last_purchase_price: parseMoney(readCell(r, ['last_purchase_price'])),
+        notes: readCell(r, ['notes'])?.trim() || null,
+      });
+    }
+
+    result.preview = valid.slice(0, 25);
+
+    if (!opts.dryRun && valid.length > 0) {
+      await this.db.transaction().execute(async (trx) => {
+        for (const v of valid) {
+          const existing = await trx
+            .selectFrom('inventory')
+            .select(['quantity_on_hand', 'quantity_reserved'])
+            .where('product_id', '=', v.product_id)
+            .forUpdate()
+            .executeTakeFirst();
+          const currentOnHand = existing?.quantity_on_hand ?? 0;
+          const currentReserved = existing?.quantity_reserved ?? 0;
+          const delta = v.quantity_on_hand - currentOnHand;
+          if (v.quantity_on_hand < currentReserved) {
+            throw new Error(
+              `Inventory import would put ${v.sku} below reserved quantity`,
+            );
+          }
+
+          const inventoryPatch = {
+            quantity_on_hand: v.quantity_on_hand,
+            ...(v.location && { location: v.location }),
+            ...(v.weighted_avg_cost !== null && {
+              weighted_avg_cost: v.weighted_avg_cost,
+            }),
+            ...(v.last_purchase_price !== null && {
+              last_purchase_price: v.last_purchase_price,
+            }),
+          };
+
+          if (existing) {
+            await trx
+              .updateTable('inventory')
+              .set(inventoryPatch)
+              .where('product_id', '=', v.product_id)
+              .execute();
+          } else {
+            await trx
+              .insertInto('inventory')
+              .values({
+                product_id: v.product_id,
+                quantity_on_hand: v.quantity_on_hand,
+                quantity_reserved: 0,
+                location: v.location ?? 'main',
+                weighted_avg_cost: v.weighted_avg_cost ?? '0',
+                last_purchase_price: v.last_purchase_price,
+              })
+              .execute();
+          }
+
+          if (delta !== 0) {
+            await trx
+              .insertInto('inventory_movements')
+              .values({
+                product_id: v.product_id,
+                delta,
+                reserved_delta: 0,
+                reason: 'adjustment',
+                unit_cost:
+                  delta > 0
+                    ? v.last_purchase_price ?? v.weighted_avg_cost
+                    : null,
+                actor_user_id: opts.actorUserId,
+                notes:
+                  v.notes ??
+                  `CSV inventory import: ${currentOnHand} → ${v.quantity_on_hand}`,
+              })
+              .execute();
+          }
+        }
+      });
+      await this.cache.invalidateInventory();
+      this.logger.log(
+        `Inventory import: ${valid.length}/${records.length} rows committed (actor=${opts.actorUserId ?? 'unknown'})`,
       );
     }
 
@@ -475,4 +702,43 @@ function parseBool(input: string | undefined, fallback: boolean): boolean {
   if (['1', 'true', 't', 'yes', 'y'].includes(s)) return true;
   if (['0', 'false', 'f', 'no', 'n', ''].includes(s)) return false;
   return fallback;
+}
+
+function readCell(
+  row: Record<string, string>,
+  aliases: string[],
+): string | undefined {
+  for (const alias of aliases) {
+    if (row[alias] !== undefined) return row[alias];
+  }
+  const normalized = new Map(
+    Object.entries(row).map(([key, value]) => [
+      key.toLowerCase().replace(/[\s-]+/g, '_'),
+      value,
+    ]),
+  );
+  for (const alias of aliases) {
+    const value = normalized.get(alias.toLowerCase().replace(/[\s-]+/g, '_'));
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function parseWholeNumber(input: string | undefined): number | null {
+  const cleaned = (input ?? '').trim().replace(/,/g, '');
+  if (!/^\d+$/.test(cleaned)) return null;
+  const value = Number(cleaned);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function parseMoney(input: string | undefined): string | null {
+  const cleaned = (input ?? '').trim().replace(/[$,]/g, '');
+  if (!cleaned) return null;
+  if (!/^\d+(\.\d+)?$/.test(cleaned)) return null;
+  return cleaned;
+}
+
+function normalizeLocation(input: string | undefined): string | null {
+  const location = (input ?? '').trim();
+  return location ? location.slice(0, 64) : null;
 }

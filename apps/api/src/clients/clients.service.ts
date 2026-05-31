@@ -19,6 +19,24 @@ export interface ClientSearchResult extends Client {
   last_invoice_at: Date | null;
 }
 
+export type ClientExportHistoryFilter =
+  | 'all'
+  | 'bought_from_us'
+  | 'sold_to_us'
+  | 'bought_or_sold'
+  | 'bought_and_sold'
+  | 'no_history';
+
+type ClientInvoiceStats = {
+  bought_from_us_count: number;
+  bought_from_us_total: string;
+  bought_from_us_last_at: Date | null;
+  sold_to_us_count: number;
+  sold_to_us_total: string;
+  sold_to_us_last_at: Date | null;
+  invoice_count: number;
+};
+
 @Injectable()
 export class ClientsService {
   private readonly bcryptCost: number;
@@ -766,6 +784,150 @@ export class ClientsService {
   }
 
   /**
+   * Export selected client-file fields plus invoice history rollups.
+   *
+   * Invoice type mapping follows AGC Desk semantics:
+   *   - type='sell' means the client bought from AGC.
+   *   - type='buy' means the client sold to AGC.
+   *
+   * Canceled invoices are ignored so a dead draft/canceled sale does not
+   * accidentally put a client into a marketing/export bucket.
+   */
+  async exportSelected(
+    ids: string[],
+    opts: {
+      actorUserId: string;
+      historyFilter: ClientExportHistoryFilter;
+    },
+  ): Promise<{ filename: string; csv: string; rowCount: number }> {
+    const uniqueIds = Array.from(new Set(ids));
+    if (uniqueIds.length === 0) {
+      return {
+        filename: this.clientExportFilename(opts.historyFilter),
+        csv: toCsv([]),
+        rowCount: 0,
+      };
+    }
+
+    const allowOwnerPrivate = await canViewOwnerPrivate(this.db, opts.actorUserId);
+    let q = this.db
+      .selectFrom('clients')
+      .selectAll()
+      .where('id', 'in', uniqueIds);
+    if (!allowOwnerPrivate) q = q.where('is_owner_private', '=', false);
+
+    const clients = await q
+      .orderBy('last_name')
+      .orderBy('first_name')
+      .orderBy('company')
+      .execute();
+
+    if (clients.length === 0) {
+      return {
+        filename: this.clientExportFilename(opts.historyFilter),
+        csv: toCsv([]),
+        rowCount: 0,
+      };
+    }
+
+    const visibleIds = clients.map((c) => c.id);
+    const invoiceStats = await this.db
+      .selectFrom('invoices')
+      .select([
+        'client_id',
+        sql<string>`count(*) filter (where status <> 'canceled')`.as('invoice_count'),
+        sql<string>`count(*) filter (where type = 'sell' and status <> 'canceled')`.as(
+          'bought_from_us_count',
+        ),
+        sql<string>`coalesce(sum(total) filter (where type = 'sell' and status <> 'canceled'), 0)::text`.as(
+          'bought_from_us_total',
+        ),
+        sql<Date | null>`max(created_at) filter (where type = 'sell' and status <> 'canceled')`.as(
+          'bought_from_us_last_at',
+        ),
+        sql<string>`count(*) filter (where type = 'buy' and status <> 'canceled')`.as(
+          'sold_to_us_count',
+        ),
+        sql<string>`coalesce(sum(total) filter (where type = 'buy' and status <> 'canceled'), 0)::text`.as(
+          'sold_to_us_total',
+        ),
+        sql<Date | null>`max(created_at) filter (where type = 'buy' and status <> 'canceled')`.as(
+          'sold_to_us_last_at',
+        ),
+      ])
+      .where('client_id', 'in', visibleIds)
+      .groupBy('client_id')
+      .execute();
+
+    const statsByClient = new Map<string, ClientInvoiceStats>();
+    for (const s of invoiceStats) {
+      statsByClient.set(s.client_id, {
+        invoice_count: Number(s.invoice_count),
+        bought_from_us_count: Number(s.bought_from_us_count),
+        bought_from_us_total: s.bought_from_us_total,
+        bought_from_us_last_at: s.bought_from_us_last_at,
+        sold_to_us_count: Number(s.sold_to_us_count),
+        sold_to_us_total: s.sold_to_us_total,
+        sold_to_us_last_at: s.sold_to_us_last_at,
+      });
+    }
+
+    const rows = clients
+      .map((client) => {
+        const stats =
+          statsByClient.get(client.id) ??
+          ({
+            invoice_count: 0,
+            bought_from_us_count: 0,
+            bought_from_us_total: '0',
+            bought_from_us_last_at: null,
+            sold_to_us_count: 0,
+            sold_to_us_total: '0',
+            sold_to_us_last_at: null,
+          } satisfies ClientInvoiceStats);
+        return { client, stats };
+      })
+      .filter(({ stats }) => matchesHistoryFilter(stats, opts.historyFilter))
+      .map(({ client, stats }) => ({
+        client_id: client.id,
+        client_type: client.client_type,
+        first_name: client.first_name ?? '',
+        last_name: client.last_name ?? '',
+        company: client.company ?? '',
+        email: client.email ?? '',
+        secondary_emails: (client.secondary_emails ?? []).join('; '),
+        phone: client.phone ?? '',
+        address_line1: client.address_line1 ?? '',
+        address_line2: client.address_line2 ?? '',
+        city: client.city ?? '',
+        region: client.region ?? '',
+        postal_code: client.postal_code ?? '',
+        country: client.country ?? '',
+        heard_from: client.heard_from ?? '',
+        notes: client.notes ?? '',
+        portal_enabled: client.is_portal_enabled ? 'yes' : 'no',
+        has_portal_user: client.user_id ? 'yes' : 'no',
+        exclude_from_reports: client.exclude_from_reports ? 'yes' : 'no',
+        is_owner_private: client.is_owner_private ? 'yes' : 'no',
+        invoice_count: String(stats.invoice_count),
+        bought_from_us_count: String(stats.bought_from_us_count),
+        bought_from_us_total: stats.bought_from_us_total,
+        bought_from_us_last_at: formatExportDate(stats.bought_from_us_last_at),
+        sold_to_us_count: String(stats.sold_to_us_count),
+        sold_to_us_total: stats.sold_to_us_total,
+        sold_to_us_last_at: formatExportDate(stats.sold_to_us_last_at),
+        created_at: formatExportDate(client.created_at),
+        updated_at: formatExportDate(client.updated_at),
+      }));
+
+    return {
+      filename: this.clientExportFilename(opts.historyFilter),
+      csv: toCsv(rows),
+      rowCount: rows.length,
+    };
+  }
+
+  /**
    * Hard-delete a single client. Blocks if there are any invoices attached
    * — historical totals + audit depends on the client row existing. Staff
    * must archive by disabling the portal + clearing PII instead.
@@ -1019,6 +1181,85 @@ export class ClientsService {
     // Ensure at least one digit + one letter by construction.
     return `${raw.slice(0, 10)}${Math.floor(Math.random() * 10)}A`;
   }
+
+  private clientExportFilename(filter: ClientExportHistoryFilter): string {
+    const stamp = new Date().toISOString().slice(0, 10);
+    return `agc-clients-${filter}-${stamp}.csv`;
+  }
+}
+
+function matchesHistoryFilter(
+  stats: ClientInvoiceStats,
+  filter: ClientExportHistoryFilter,
+): boolean {
+  const bought = stats.bought_from_us_count > 0;
+  const sold = stats.sold_to_us_count > 0;
+  switch (filter) {
+    case 'bought_from_us':
+      return bought;
+    case 'sold_to_us':
+      return sold;
+    case 'bought_or_sold':
+      return bought || sold;
+    case 'bought_and_sold':
+      return bought && sold;
+    case 'no_history':
+      return !bought && !sold;
+    case 'all':
+    default:
+      return true;
+  }
+}
+
+function formatExportDate(value: Date | string | null): string {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString();
+}
+
+function toCsv(rows: Array<Record<string, string>>): string {
+  const headers = rows[0] ? Object.keys(rows[0]) : [
+    'client_id',
+    'client_type',
+    'first_name',
+    'last_name',
+    'company',
+    'email',
+    'secondary_emails',
+    'phone',
+    'address_line1',
+    'address_line2',
+    'city',
+    'region',
+    'postal_code',
+    'country',
+    'heard_from',
+    'notes',
+    'portal_enabled',
+    'has_portal_user',
+    'exclude_from_reports',
+    'is_owner_private',
+    'invoice_count',
+    'bought_from_us_count',
+    'bought_from_us_total',
+    'bought_from_us_last_at',
+    'sold_to_us_count',
+    'sold_to_us_total',
+    'sold_to_us_last_at',
+    'created_at',
+    'updated_at',
+  ];
+  const lines = [
+    headers.map(csvCell).join(','),
+    ...rows.map((row) => headers.map((header) => csvCell(row[header] ?? '')).join(',')),
+  ];
+  return `\uFEFF${lines.join('\n')}\n`;
+}
+
+function csvCell(value: string): string {
+  if (!/[",\n\r]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 /**

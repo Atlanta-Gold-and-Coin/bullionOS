@@ -10,8 +10,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsUUID } from 'class-validator';
+import { Response } from 'express';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsOptional, IsUUID } from 'class-validator';
 import { CurrentUser, type RequestUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { ClientsService } from './clients.service';
@@ -34,6 +36,29 @@ class MergeClientsDto {
   @ArrayMaxSize(50)
   @IsUUID(undefined, { each: true })
   loser_ids!: string[];
+}
+
+const CLIENT_EXPORT_HISTORY_FILTERS = [
+  'all',
+  'bought_from_us',
+  'sold_to_us',
+  'bought_or_sold',
+  'bought_and_sold',
+  'no_history',
+] as const;
+
+type ClientExportHistoryFilter = (typeof CLIENT_EXPORT_HISTORY_FILTERS)[number];
+
+class BulkExportDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(2000)
+  @IsUUID(undefined, { each: true })
+  ids!: string[];
+
+  @IsOptional()
+  @IsIn(CLIENT_EXPORT_HISTORY_FILTERS)
+  history_filter?: ClientExportHistoryFilter;
 }
 
 @Controller('admin/clients')
@@ -144,6 +169,24 @@ export class AdminClientsController {
     @CurrentUser() user: RequestUser,
   ) {
     await this.clients.delete(id, user.id);
+  }
+
+  @Post('export')
+  async exportSelected(
+    @Body() dto: BulkExportDto,
+    @CurrentUser() user: RequestUser,
+    @Res() res: Response,
+  ) {
+    const out = await this.clients.exportSelected(dto.ids, {
+      actorUserId: user.id,
+      historyFilter: dto.history_filter ?? 'all',
+    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${out.filename}"`,
+    );
+    res.send(out.csv);
   }
 
   /**

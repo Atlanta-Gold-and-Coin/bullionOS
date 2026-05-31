@@ -231,6 +231,19 @@ export class InvoicePdfService {
       cursorY += 10;
     }
 
+    // --- Shipment tracking ---
+    // Shipments are linked to invoices after the sale/ticket is created.
+    // When present, print the carrier + tracking number and include a QR
+    // that opens the carrier's tracking page directly.
+    const shipmentRows = invoice.shipments ?? [];
+    if (shipmentRows.length > 0) {
+      if (cursorY > 610) {
+        doc.addPage();
+        cursorY = 54;
+      }
+      cursorY = await this.drawShipmentSection(doc, cursorY, shipmentRows);
+    }
+
     // --- Notes (operator-entered) ---
     if (invoice.notes && invoice.notes.trim().length > 0) {
       if (cursorY > 640) {
@@ -382,6 +395,77 @@ export class InvoicePdfService {
       ];
     }
     return [];
+  }
+
+  private async drawShipmentSection(
+    doc: PDFKit.PDFDocument,
+    y: number,
+    shipments: InvoiceWithLines['shipments'],
+  ): Promise<number> {
+    const firstTrackable = shipments.find((s) => s.tracking_url);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .fillColor('#8a8a92')
+      .text(shipments.length === 1 ? 'SHIPMENT' : 'SHIPMENTS', 54, y);
+
+    const listTop = y + 14;
+    const listWidth = firstTrackable ? 386 : 504;
+    let rowY = listTop;
+    for (const shipment of shipments) {
+      const carrier = shipment.carrier.toUpperCase();
+      const service = shipment.delivery_speed ? ` · ${shipment.delivery_speed}` : '';
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(9)
+        .fillColor('#17171a')
+        .text(`${carrier}${service}`, 54, rowY, { width: listWidth });
+      rowY += 11;
+
+      const tracking = shipment.tracking_number
+        ? `Tracking: ${shipment.tracking_number}`
+        : 'Tracking pending';
+      doc
+        .font('Courier')
+        .fontSize(9)
+        .fillColor('#17171a')
+        .text(tracking, 54, rowY, { width: listWidth });
+      rowY += 11;
+
+      doc
+        .font('Helvetica')
+        .fontSize(8)
+        .fillColor('#55555c')
+        .text(`Status: ${shipment.status.replace(/_/g, ' ')}`, 54, rowY, {
+          width: listWidth,
+        });
+      rowY += 16;
+    }
+
+    if (firstTrackable?.tracking_url) {
+      try {
+        const qrBuffer = await QRCode.toBuffer(firstTrackable.tracking_url, {
+          errorCorrectionLevel: 'M',
+          margin: 1,
+          width: 180,
+        });
+        doc.image(qrBuffer, 476, listTop, { width: 58, height: 58 });
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(8)
+          .fillColor('#17171a')
+          .text('Scan to track', 438, listTop + 62, {
+            width: 134,
+            align: 'center',
+          });
+      } catch (err) {
+        this.logger.warn(
+          `Tracking QR generation failed: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    return Math.max(rowY, firstTrackable ? listTop + 78 : rowY) + 10;
   }
 
   private drawWordmark(doc: PDFKit.PDFDocument, branding: BrandingSettings) {
