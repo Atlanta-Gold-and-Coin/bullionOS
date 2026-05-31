@@ -13,6 +13,7 @@ import { PricingModule } from './pricing/pricing.module';
 import { ProductsModule } from './products/products.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { ClientsModule } from './clients/clients.module';
+import { UsersModule } from './users/users.module';
 import { PublicModule } from './public/public.module';
 import { ClientPortalModule } from './client-portal/client-portal.module';
 import { SettingsModule } from './settings/settings.module';
@@ -87,6 +88,7 @@ import { AllExceptionsFilter } from './common/filters/http-exception.filter';
     PricingModule,
     ProductsModule,
     ClientsModule,
+    UsersModule,
     // SettingsModule + EmailModule before InvoicesModule/InventoryModule
     // so RestockModule can pull its deps; InventoryService injects
     // RestockService, so RestockModule must be instantiable before

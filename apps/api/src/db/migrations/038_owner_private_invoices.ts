@@ -1,4 +1,4 @@
-import { Kysely, sql } from 'kysely';
+import { Kysely } from 'kysely';
 
 /**
  * 038_owner_private_invoices
@@ -20,9 +20,10 @@ import { Kysely, sql } from 'kysely';
  * which has the opposite semantics (those clients are skipped by KPI/
  * EOD entirely — used for test accounts that should never count).
  *
- * Bootstrap: flips `can_view_owner_private` to true on Hunter's and
- * the accounting (Tim) user accounts by email match. Adding more
- * allowlisted users later is a one-line UPDATE; no code change.
+ * Allowlisting: `can_view_owner_private` defaults to false for every
+ * user. Admins grant it per-user via the /admin/users checkbox (no
+ * hardcoded tenant emails — this product is shipped per-tenant and
+ * must not bake AGC-specific accounts into the schema history).
  */
 export async function up(db: Kysely<unknown>): Promise<void> {
   await db.schema
@@ -38,17 +39,6 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       c.notNull().defaultTo(false),
     )
     .execute();
-
-  // Allowlist Hunter + Tim. Email match keeps the migration
-  // idempotent and avoids hardcoding UUIDs that vary per env.
-  await sql`
-    UPDATE users
-       SET can_view_owner_private = true
-     WHERE lower(email) IN (
-       'hunter@atlantagoldandcoin.com',
-       'accounting@atlantagoldandcoin.com'
-     )
-  `.execute(db);
 }
 
 export async function down(db: Kysely<unknown>): Promise<void> {

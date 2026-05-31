@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Providers } from './providers';
+import { BrandThemeStyle } from './brand-theme-style';
 import './globals.css';
 
 // Build-time branding for static metadata (HTML <title>, OG tags).
@@ -33,7 +34,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="min-h-full antialiased font-sans">
-        <Providers>{children}</Providers>
+        <Providers>
+          {/* Injects tenant --brand-* overrides at runtime (SSR-safe;
+              no-op until settings load, omits unset fields). */}
+          <BrandThemeStyle />
+          {children}
+        </Providers>
         {/*
          * Privacy policy link — kept on every page at the root level so
          * Google's OAuth consent-screen verifier (which crawls the app's

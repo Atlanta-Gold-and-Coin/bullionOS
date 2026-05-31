@@ -10,12 +10,15 @@ import {
   BullionOSHeroMark,
   BullionOSWordmark,
 } from '@/components/bullion-os-logo';
-import { useAppSettings } from '@/lib/use-app-settings';
+import { useAppSettings, useFlag } from '@/lib/use-app-settings';
 
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
   const { data: appSettings } = useAppSettings();
+  // White-label tenants drop the platform lockup (hero tagline + footer)
+  // by turning this flag off. Default true → today's look is unchanged.
+  const showPlatformBranding = useFlag('show_platform_branding');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +59,7 @@ export default function LoginPage() {
       <div className="mb-8 flex flex-col items-center">
         <BullionOSHeroMark size={140} />
         <div className="mt-4">
-          <BullionOSWordmark size="lg" withTagline />
+          <BullionOSWordmark size="lg" withTagline={showPlatformBranding} />
         </div>
       </div>
 
@@ -131,11 +134,13 @@ export default function LoginPage() {
         </p>
       </div>
 
-      <p className="mt-6 text-[10px] uppercase tracking-[0.18em] text-bos-mute">
-        Powered by{' '}
-        <span className="text-white">bullion</span>
-        <span className="text-gold-400">OS</span>
-      </p>
+      {showPlatformBranding && (
+        <p className="mt-6 text-[10px] uppercase tracking-[0.18em] text-bos-mute">
+          Powered by{' '}
+          <span className="text-white">bullion</span>
+          <span className="text-gold-400">OS</span>
+        </p>
+      )}
     </main>
   );
 }

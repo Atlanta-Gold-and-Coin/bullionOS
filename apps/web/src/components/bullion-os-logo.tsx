@@ -1,5 +1,5 @@
 /**
- * BullionOS brand assets — three components:
+ * BullionOS brand assets — three inline-SVG components:
  *
  *   - <BullionOSLogo>      Compact "ring + bar" mark for sidebar tiles.
  *   - <BullionOSWordmark>  Lowercase "bullionOS" wordmark, with optional
@@ -9,7 +9,20 @@
  *
  * All drawn as inline SVG so they scale cleanly and the gold gradient
  * stays sharp at any size — no raster bitmap dep.
+ *
+ * Plus one branding-aware wrapper:
+ *
+ *   - <BrandedLogo>        Renders the tenant's uploaded logo when the
+ *                          branding payload reports one, else falls back
+ *                          to the inline <BullionOSLogo> mark. Use this
+ *                          in the app chrome so white-label tenants show
+ *                          their own mark; default (no logo uploaded)
+ *                          reproduces today's look byte-for-byte.
  */
+
+'use client';
+
+import { useAppSettings } from '@/lib/use-app-settings';
 
 export function BullionOSLogo({
   size = 32,
@@ -191,4 +204,44 @@ export function BullionOSHeroMark({
       />
     </svg>
   );
+}
+
+/**
+ * Branding-aware mark. When the tenant has uploaded a logo
+ * (branding.has_logo) it renders that bitmap from the public branding
+ * endpoint; otherwise it falls back to the inline <BullionOSLogo> SVG
+ * so the default (un-customized) deploy looks exactly as it does today.
+ *
+ * `size` controls both the SVG fallback and the rendered <img> box
+ * (square, object-contain so non-square logos letterbox rather than
+ * distort). `alt` defaults to the tenant company name when known.
+ */
+export function BrandedLogo({
+  size = 32,
+  className,
+  alt,
+}: {
+  size?: number;
+  className?: string;
+  alt?: string;
+}) {
+  const { data } = useAppSettings();
+  const branding = data?.branding;
+
+  if (branding?.has_logo) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- served
+      // from the API proxy (BYTEA), not the Next image pipeline.
+      <img
+        src={branding.logo_url ?? '/api/v1/public/branding/logo'}
+        alt={alt ?? branding.company_name ?? 'Logo'}
+        width={size}
+        height={size}
+        className={className}
+        style={{ width: size, height: size, objectFit: 'contain' }}
+      />
+    );
+  }
+
+  return <BullionOSLogo size={size} className={className} />;
 }

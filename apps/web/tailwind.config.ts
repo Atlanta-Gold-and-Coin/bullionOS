@@ -20,8 +20,13 @@ const config: Config = {
           // branded chrome — sidebar active state, hero mark gradients,
           // login wordmark. Existing 500/600 stay tuned for the inline
           // "elegant tan" accents already used across forms + buttons.
-          300: '#f3d266',
-          400: '#e7b934',
+          //
+          // 300/400 (the bright branded accent tier) route through the
+          // --brand-accent* CSS vars so a tenant accent override
+          // recolors the chrome accents; the fallback hex are today's
+          // exact values, so an un-customized deploy is unchanged.
+          300: 'var(--brand-accent-strong, #f3d266)',
+          400: 'var(--brand-accent, #e7b934)',
           500: '#c9a96a',
           600: '#b08e4a',
         },
@@ -33,7 +38,10 @@ const config: Config = {
         // "branded shell + content surface" look.
         bos: {
           black: '#05060d', // page backdrop
-          night: '#0a0d18', // sidebar / header / footer
+          // sidebar / header / footer chrome — routed through
+          // --brand-chrome-bg so a tenant can recolor the shell; the
+          // fallback is today's exact night tone.
+          night: 'var(--brand-chrome-bg, #0a0d18)',
           line:  'rgba(231,185,52,0.10)', // subtle gold border
           text:  '#c7beab', // warm gray for sidebar copy
           mute:  '#9a907c', // dimmer copy / icons
@@ -58,7 +66,10 @@ const config: Config = {
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        // `font-sans` routes through --brand-font so a tenant
+        // font_family override flows to every Tailwind text utility;
+        // the fallback is today's exact Inter stack.
+        sans: ['var(--brand-font)', 'Inter', 'system-ui', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'monospace'],
       },
     },

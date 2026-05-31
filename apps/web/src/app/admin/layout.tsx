@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { SpotTicker } from '@/components/spot-ticker';
 import { NotificationsBell } from '@/components/notifications-bell';
-import { useAppSettings, type FlagName } from '@/lib/use-app-settings';
+import { useAppSettings, useFlag, useSetting, type FlagName } from '@/lib/use-app-settings';
 import {
   BullionOSLogo,
   BullionOSWordmark,
@@ -289,8 +289,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 /**
  * Branded footer that appears at the bottom of every admin page.
  * Subtle "Powered by BullionOS" lockup over the dark night surface.
+ *
+ * Gated behind the `show_platform_branding` flag (default true →
+ * unchanged): white-label tenants turn it off to drop the platform
+ * lockup entirely.
  */
 function AdminFooter() {
+  const showPlatformBranding = useFlag('show_platform_branding');
+  if (!showPlatformBranding) return null;
   return (
     <footer className="border-t border-bos-line bg-bos-night px-4 py-4 text-center md:px-10">
       <div className="flex items-center justify-center gap-2 text-[11px] uppercase tracking-[0.18em] text-bos-mute">
@@ -320,17 +326,39 @@ function SidebarBody({
   const visibleNav = appSettings
     ? applyFlags(NAV_ITEMS, appSettings.flags)
     : NAV_ITEMS;
+  // Cross-tenant dealer marketplace. The destination is now a per-tenant
+  // setting (`dealer_board.url`) rather than a hardcoded host — empty
+  // hides the link entirely.
+  const dealerBoardUrl = useSetting('dealer_board.url');
+  // Branding-aware mark: tenant logo when one is configured, else the
+  // built-in BullionOS inline SVG. company_name drives the subtitle with
+  // the original "BullionOS Desk" fallback so the default look is
+  // unchanged.
+  const brandName = appSettings?.branding.company_name ?? 'BullionOS Desk';
+  const hasLogo = appSettings?.branding.has_logo ?? false;
   return (
     <>
       <div className="flex items-center gap-2 px-2">
-        <BullionOSLogo size={28} />
+        {hasLogo ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src="/api/v1/public/branding/logo"
+            alt={brandName}
+            className="h-7 w-7 rounded-md object-contain"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+            }}
+          />
+        ) : (
+          <BullionOSLogo size={28} />
+        )}
         <div>
           <div className="font-semibold leading-none text-white">
             <span>bullion</span>
             <span className="text-gold-400">OS</span>
           </div>
           <div className="text-[10px] uppercase tracking-wide text-bos-mute">
-            {appSettings?.branding.company_name ?? 'BullionOS Desk'} · Admin
+            {brandName} · Admin
           </div>
         </div>
       </div>
@@ -364,19 +392,20 @@ function SidebarBody({
         >
           Client portal view →
         </a>
-        {/* Cross-tenant dealer marketplace. Lives off-instance at
-            dealer.bullionostrading.com so dealers from any home tenant
-            (this bullionOS instance, agc-crm, future tenants) can
-            trade with each other. Opens in a new tab so it doesn't
-            disrupt the operator's session. */}
-        <a
-          href="https://dealer.bullionostrading.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block w-full rounded-md border border-gold-400/30 bg-gold-400/5 px-3 py-1.5 text-center text-gold-400 hover:bg-gold-400/10 hover:text-gold-300"
-        >
-          Dealer Board ↗
-        </a>
+        {/* Cross-tenant dealer marketplace. Lives off-instance so dealers
+            from any home tenant can trade with each other; the host is a
+            per-tenant setting. Opens in a new tab so it doesn't disrupt
+            the operator's session. Hidden when no URL is configured. */}
+        {dealerBoardUrl && (
+          <a
+            href={dealerBoardUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block w-full rounded-md border border-gold-400/30 bg-gold-400/5 px-3 py-1.5 text-center text-gold-400 hover:bg-gold-400/10 hover:text-gold-300"
+          >
+            Dealer Board ↗
+          </a>
+        )}
         <button
           onClick={onLogout}
           className="w-full rounded-md border border-bos-line px-3 py-1.5 text-center text-bos-text hover:bg-white/5 hover:text-white"

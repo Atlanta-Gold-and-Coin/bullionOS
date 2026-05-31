@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { FLAG_KEYS, VALUE_KEYS, type FlagKey, type ValueKey } from '@agc/shared';
 import { apiFetch } from './api-client';
 
 /**
@@ -8,19 +9,20 @@ import { apiFetch } from './api-client';
  * Kept hand-written (not auto-generated) since both ends are small
  * and the registry is the source of truth on the server.
  *
- * To add a new flag or value:
+ * The flag/value KEY SET is derived from '@agc/shared' (FLAG_KEYS /
+ * VALUE_KEYS) so the FE never drifts from the BE registry. To add a
+ * new flag or value:
  *   1. Add the entry to apps/api/src/settings/settings-registry.ts.
- *   2. Add the corresponding key to FlagName/ValueShape below.
+ *   2. Add the key to packages/shared/src/settings-keys.ts.
  *   3. Read it in components via useFlag(name) / useSetting(key).
+ *
+ * Note: useSetting still needs the per-key VALUE TYPE (number vs
+ * string), which keys alone can't carry — ValueShape stays the
+ * hand-written type map for that. Its keys must stay in sync with
+ * VALUE_KEYS (enforced structurally below).
  */
 
-export type FlagName =
-  | 'client_tracking_enabled'
-  | 'scrap_enabled'
-  | 'ifs_enabled'
-  | 'eod_reports_enabled'
-  | 'frontend_pricing_enabled'
-  | 'compliance_photos_enabled';
+export type FlagName = FlagKey;
 
 export interface ValueShape {
   'dashboard.new_clients_baseline': number;
@@ -28,6 +30,7 @@ export interface ValueShape {
   'eod_report.from_email': string;
   'app.url': string;
   'staff.email_domains': string;
+  'dealer_board.url': string;
 }
 
 export interface BrandingPayload {
@@ -42,6 +45,13 @@ export interface BrandingPayload {
   logo_url: string | null;
   has_favicon: boolean;
   favicon_url: string | null;
+  // Tenant theming overrides. Empty string => use the built-in
+  // default (today's hardcoded look). Injected at runtime as
+  // --brand-* CSS vars by layout.tsx, consumed in globals.css /
+  // tailwind.config.ts via var(--brand-*, <currentHex>) fallbacks.
+  accent_color: string;
+  sidebar_bg: string;
+  font_family: string;
 }
 
 export interface AppSettings {
@@ -87,10 +97,18 @@ export function useSetting<K extends keyof ValueShape>(name: K): ValueShape[K] {
       'eod_report.from_email': '',
       'app.url': '',
       'staff.email_domains': '',
+      'dealer_board.url': '',
     };
     return fallback[name];
   }
   return data.values[name];
 }
+
+// Reference the imported key arrays so they're retained as the
+// source-of-truth handshake with '@agc/shared' (and to make the
+// dependency explicit for tooling). FLAG_KEYS/VALUE_KEYS drive the
+// FlagKey/ValueKey types above.
+export { FLAG_KEYS, VALUE_KEYS };
+export type { ValueKey };
 
 export const APP_SETTINGS_QUERY_KEY = APP_SETTINGS_KEY;

@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { Kysely } from 'kysely';
+import { Kysely, sql } from 'kysely';
 import { KYSELY } from '../db/database.module';
 import type { DB, Product } from '../db/types';
 import { d, toDbString } from '../common/money';
@@ -82,6 +82,12 @@ export class ProductsService {
           image_url: dto.image_url ?? null,
           is_active: dto.is_active ?? true,
           show_on_website: dto.show_on_website ?? false,
+          // Migration 039: per-tenant custom field values. Passthrough,
+          // defaults to {} when the form sends nothing. JSONB needs an
+          // explicit ::jsonb cast so pg doesn't drop the object to text.
+          ...(dto.custom_fields !== undefined && {
+            custom_fields: sql`${JSON.stringify(dto.custom_fields)}::jsonb`,
+          }),
         })
         .returningAll()
         .executeTakeFirstOrThrow();
@@ -157,6 +163,11 @@ export class ProductsService {
           ...(dto.display_category_override !== undefined && {
             display_category_override:
               dto.display_category_override === '' ? null : dto.display_category_override,
+          }),
+          // Migration 039: per-tenant custom field values. Passthrough
+          // (replace semantics) — JSONB needs the explicit ::jsonb cast.
+          ...(dto.custom_fields !== undefined && {
+            custom_fields: sql`${JSON.stringify(dto.custom_fields)}::jsonb`,
           }),
         })
         .where('id', '=', id)

@@ -81,6 +81,35 @@ export default function SettingsPage() {
               Open →
             </Link>
           </li>
+          <li className="flex items-center justify-between py-2">
+            <div>
+              <div className="font-medium text-ink-900">Appearance</div>
+              <div className="text-xs text-ink-500">
+                Optional accent color, sidebar background, and font overrides.
+                Blank uses the built-in theme.
+              </div>
+            </div>
+            <Link
+              href="/admin/settings/appearance"
+              className="rounded-md border border-ink-200 px-3 py-1 text-sm text-ink-700 hover:bg-ink-50"
+            >
+              Open →
+            </Link>
+          </li>
+          <li className="flex items-center justify-between py-2">
+            <div>
+              <div className="font-medium text-ink-900">Custom fields</div>
+              <div className="text-xs text-ink-500">
+                Define extra fields to capture on clients and products.
+              </div>
+            </div>
+            <Link
+              href="/admin/settings/custom-fields"
+              className="rounded-md border border-ink-200 px-3 py-1 text-sm text-ink-700 hover:bg-ink-50"
+            >
+              Open →
+            </Link>
+          </li>
         </ul>
       </section>
     </div>
