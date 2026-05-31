@@ -61,6 +61,11 @@ export const FLAG_REGISTRY = {
     description:
       'Show ID + client photo + item photo capture sections on scrap invoices. Some jurisdictions require this; others do not.',
   },
+  show_platform_branding: {
+    default: true,
+    description:
+      "Show the 'Powered by BullionOS' lockup + platform logo. White-label tenants turn it off.",
+  },
 } as const satisfies Record<string, FlagDef>;
 
 export type FlagName = keyof typeof FLAG_REGISTRY;
@@ -96,6 +101,12 @@ export const VALUE_REGISTRY = {
     description:
       'Comma-separated list of email domains your staff use (e.g. "yourcoin.com,yourcoinbuyers.com"). Used to mark staff vs. external attendees in calendar bookings and reminder logic. Empty = no domains treated as staff.',
   },
+  'dealer_board.url': {
+    type: 'string',
+    default: '',
+    description:
+      'URL of the external Dealer Board. When set, the admin nav shows a Dealer Board link pointing here; empty hides the link.',
+  },
 } as const satisfies Record<string, ValueDef>;
 
 export type ValueName = keyof typeof VALUE_REGISTRY;
@@ -104,9 +115,28 @@ export type ValueName = keyof typeof VALUE_REGISTRY;
 export type ValueOf<K extends ValueName> =
   typeof VALUE_REGISTRY[K]['type'] extends 'number' ? number : string;
 
+/**
+ * A single tenant-defined custom field, attached to clients or products.
+ * Stored as JSON under the `custom_fields_schema` app_setting; the FE
+ * renders an input per def and reads/writes entity.custom_fields[key].
+ */
+export interface FieldDef {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'select' | 'date' | 'boolean';
+  options?: string[];
+}
+
+/** Custom-field schema grouped by entity. Default: both empty. */
+export interface CustomFieldSchema {
+  clients: FieldDef[];
+  products: FieldDef[];
+}
+
 /** Public response shape for GET /admin/settings consumers. */
 export interface AppSettingsResponse {
   branding: import('./settings.service').BrandingSettings;
   flags: Record<FlagName, boolean>;
   values: { [K in ValueName]: ValueOf<K> };
+  customFieldSchema: CustomFieldSchema;
 }

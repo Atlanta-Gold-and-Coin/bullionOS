@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsEmail,
   IsIn,
+  IsObject,
   IsOptional,
   IsString,
   MaxLength,
@@ -108,6 +109,15 @@ export class CreateClientDto {
   @IsOptional()
   @IsBoolean()
   is_owner_private?: boolean;
+
+  /**
+   * Migration 039: per-tenant custom field values, keyed by the field
+   * defs in app_settings `custom_fields_schema`. Stored as-is
+   * (passthrough — no server-side validation against the schema).
+   */
+  @IsOptional()
+  @IsObject()
+  custom_fields?: Record<string, unknown>;
 }
 
 export class UpdateClientDto {
@@ -200,4 +210,13 @@ export class UpdateClientDto {
   @IsOptional()
   @IsBoolean()
   is_owner_private?: boolean;
+
+  /**
+   * Migration 039: per-tenant custom field values, keyed by the field
+   * defs in app_settings `custom_fields_schema`. Stored as-is
+   * (passthrough — no server-side validation against the schema).
+   */
+  @IsOptional()
+  @IsObject()
+  custom_fields?: Record<string, unknown>;
 }

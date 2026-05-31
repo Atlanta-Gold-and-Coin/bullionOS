@@ -4,6 +4,11 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
+import {
+  CustomFieldsSection,
+  useCustomFields,
+  type CustomFieldValues,
+} from '../../clients/_custom-fields';
 
 const METALS = ['gold', 'silver', 'platinum', 'palladium'] as const;
 const CATEGORIES = ['coin', 'bar', 'round', 'numismatic', 'jewelry', 'other'] as const;
@@ -11,6 +16,8 @@ const CATEGORIES = ['coin', 'bar', 'round', 'numismatic', 'jewelry', 'other'] as
 export default function NewProductPage() {
   const router = useRouter();
   const qc = useQueryClient();
+  const customFields = useCustomFields('products');
+  const [customValues, setCustomValues] = useState<CustomFieldValues>({});
   const [form, setForm] = useState({
     sku: '',
     name: '',
@@ -38,6 +45,7 @@ export default function NewProductPage() {
           weight_troy_oz: Number(form.weight_troy_oz),
           purity: Number(form.purity),
           show_on_website: form.show_on_website,
+          custom_fields: customValues,
         }),
       });
       await qc.invalidateQueries({ queryKey: ['admin', 'products'] });
@@ -134,6 +142,17 @@ export default function NewProductPage() {
           />
           Show on public "What We Pay" feed
         </label>
+
+        {customFields.length > 0 && (
+          <div className="space-y-4 border-t border-ink-100 pt-4">
+            <span className="text-sm font-medium text-ink-800">Custom fields</span>
+            <CustomFieldsSection
+              fields={customFields}
+              values={customValues}
+              onChange={setCustomValues}
+            />
+          </div>
+        )}
 
         {error && (
           <div role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">

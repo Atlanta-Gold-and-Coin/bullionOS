@@ -168,6 +168,17 @@ export interface ClientsTable {
    * omits the dollars from totals entirely.
    */
   is_owner_private: ColumnType<boolean, boolean | undefined, boolean>;
+  /**
+   * Migration 039: per-tenant custom field values. Free-form JSONB
+   * object keyed by the field defs in app_settings `custom_fields_schema`.
+   * Defaults to `{}` so existing rows are unaffected; values are stored
+   * as-is (passthrough, no server-side schema validation).
+   */
+  custom_fields: ColumnType<
+    Record<string, unknown>,
+    Record<string, unknown> | undefined,
+    Record<string, unknown>
+  >;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
   // Postgres GENERATED column (migration 006, rebuilt in 020 to include
@@ -234,6 +245,17 @@ export interface ProductsTable {
    * Null = fall back to deriveDisplayCategory(name, metal, category).
    */
   display_category_override: string | null;
+  /**
+   * Migration 039: per-tenant custom field values. Free-form JSONB
+   * object keyed by the field defs in app_settings `custom_fields_schema`.
+   * Defaults to `{}` so existing rows are unaffected; values are stored
+   * as-is (passthrough, no server-side schema validation).
+   */
+  custom_fields: ColumnType<
+    Record<string, unknown>,
+    Record<string, unknown> | undefined,
+    Record<string, unknown>
+  >;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
   // Postgres GENERATED column (migration 006) — read-only.

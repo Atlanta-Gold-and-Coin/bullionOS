@@ -185,6 +185,13 @@ export class ClientsService {
         heard_from: dto.heard_from?.trim() ?? null,
         client_type: dto.client_type ?? 'retail',
         is_portal_enabled: dto.is_portal_enabled ?? false,
+        // Migration 039: per-tenant custom field values. Passthrough —
+        // stored as-is, defaults to {} when the form sends nothing.
+        // JSONB needs an explicit ::jsonb cast (pg drops parameterized
+        // objects to text otherwise) — same pattern as audit_logs.metadata.
+        ...(dto.custom_fields !== undefined && {
+          custom_fields: sql`${JSON.stringify(dto.custom_fields)}::jsonb`,
+        }),
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -231,6 +238,12 @@ export class ClientsService {
           ? (patch.email as string)
           : (await this.getById(id)).email;
       patch.secondary_emails = normalizeEmails(dto.secondary_emails, primaryNow);
+    }
+    // Migration 039: per-tenant custom field values. Passthrough — the
+    // form sends the full object, we store it as-is (replace semantics).
+    // JSONB needs an explicit ::jsonb cast (see create()).
+    if (dto.custom_fields !== undefined) {
+      patch.custom_fields = sql`${JSON.stringify(dto.custom_fields)}::jsonb`;
     }
     if (Object.keys(patch).length === 0) return this.getById(id);
 

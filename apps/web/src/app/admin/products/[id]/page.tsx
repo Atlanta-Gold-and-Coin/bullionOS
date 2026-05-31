@@ -1,11 +1,16 @@
 'use client';
 
-import { use, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch, ApiError } from '@/lib/api-client';
 import { useDisplayCategories } from '@/lib/use-display-categories';
 import { deriveDisplayCategory } from '@/lib/product-category';
+import {
+  CustomFieldsSection,
+  useCustomFields,
+  type CustomFieldValues,
+} from '../../clients/_custom-fields';
 
 interface Product {
   id: string;
@@ -21,6 +26,7 @@ interface Product {
   is_active: boolean;
   show_on_website: boolean;
   display_category_override: string | null;
+  custom_fields?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -116,7 +122,81 @@ export default function ProductDetailPage({
 
       {/* Display category override */}
       <DisplayCategoryPicker product={product} />
+
+      {/* Tenant custom fields (renders only when the tenant defined any) */}
+      <ProductCustomFields product={product} />
     </div>
+  );
+}
+
+function ProductCustomFields({ product }: { product: Product }) {
+  const qc = useQueryClient();
+  const fields = useCustomFields('products');
+  const [values, setValues] = useState<CustomFieldValues>({});
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(
+    null,
+  );
+
+  // Seed from the loaded product. product is guaranteed present here.
+  useEffect(() => {
+    const cf = product.custom_fields;
+    setValues(cf && typeof cf === 'object' ? (cf as CustomFieldValues) : {});
+  }, [product.custom_fields]);
+
+  if (fields.length === 0) return null;
+
+  async function save() {
+    setStatus(null);
+    setBusy(true);
+    try {
+      await apiFetch(`/admin/products/${product.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ custom_fields: values }),
+      });
+      await qc.invalidateQueries({ queryKey: ['admin', 'product', product.id] });
+      setStatus({ kind: 'ok', msg: 'Custom fields saved.' });
+    } catch (err) {
+      setStatus({
+        kind: 'err',
+        msg: err instanceof ApiError ? err.message : 'Save failed',
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="mt-6 rounded-xl border border-ink-200 bg-white p-5">
+      <h2 className="text-base font-semibold">Custom fields</h2>
+      <p className="mt-1 text-xs text-ink-400">
+        Tenant-defined fields from Settings → Custom Fields.
+      </p>
+      <div className="mt-4">
+        <CustomFieldsSection fields={fields} values={values} onChange={setValues} />
+      </div>
+      {status && (
+        <div
+          role={status.kind === 'err' ? 'alert' : undefined}
+          className={`mt-3 rounded-md px-3 py-1 text-xs ${
+            status.kind === 'ok'
+              ? 'bg-green-50 text-green-700'
+              : 'bg-red-50 text-red-700'
+          }`}
+        >
+          {status.msg}
+        </div>
+      )}
+      <div className="mt-4 flex justify-end">
+        <button
+          onClick={save}
+          disabled={busy}
+          className="rounded-md bg-ink-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-ink-800 disabled:opacity-60"
+        >
+          {busy ? 'Saving…' : 'Save custom fields'}
+        </button>
+      </div>
+    </section>
   );
 }
 

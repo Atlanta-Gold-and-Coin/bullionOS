@@ -2,6 +2,7 @@ import {
   IsBoolean,
   IsIn,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
@@ -72,4 +73,13 @@ export class CreateProductDto {
   })
   @MaxLength(40)
   display_category_override?: string | null;
+
+  /**
+   * Migration 039: per-tenant custom field values, keyed by the field
+   * defs in app_settings `custom_fields_schema`. Stored as-is
+   * (passthrough — no server-side validation against the schema).
+   */
+  @IsOptional()
+  @IsObject()
+  custom_fields?: Record<string, unknown>;
 }

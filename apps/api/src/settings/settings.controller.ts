@@ -13,7 +13,15 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsArray,
+  IsIn,
+  IsOptional,
+  IsString,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { Public } from '../common/decorators/public.decorator';
@@ -36,6 +44,38 @@ class UpdateBrandingDto {
   @IsOptional() @IsString() @MaxLength(120) address_city_state_zip?: string;
   @IsOptional() @IsString() @MaxLength(40) phone?: string;
   @IsOptional() @IsString() @MaxLength(120) website?: string;
+  // Theme overrides. Empty string = "use the built-in default" (the web
+  // layer only injects a CSS var when the field is non-empty), so an
+  // unset theme reproduces today's exact look.
+  @IsOptional() @IsString() @MaxLength(40) accent_color?: string;
+  @IsOptional() @IsString() @MaxLength(40) sidebar_bg?: string;
+  @IsOptional() @IsString() @MaxLength(120) font_family?: string;
+}
+
+class CustomFieldDefDto {
+  @IsString() @MaxLength(60) key!: string;
+  @IsString() @MaxLength(120) label!: string;
+  @IsIn(['text', 'number', 'select', 'date', 'boolean'])
+  type!: 'text' | 'number' | 'select' | 'date' | 'boolean';
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(120, { each: true })
+  options?: string[];
+}
+
+class UpdateCustomFieldsDto {
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFieldDefDto)
+  clients?: CustomFieldDefDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFieldDefDto)
+  products?: CustomFieldDefDto[];
 }
 
 class UpdateInvoiceTemplateDto {
@@ -248,12 +288,38 @@ export class SettingsController {
       ['address_city_state_zip', 'branding.address_city_state_zip'],
       ['phone', 'branding.phone'],
       ['website', 'branding.website'],
+      ['accent_color', 'branding.accent_color'],
+      ['sidebar_bg', 'branding.sidebar_bg'],
+      ['font_family', 'branding.font_family'],
     ];
     for (const [dtoField, key] of fields) {
       const value = dto[dtoField];
       if (value !== undefined) await this.settings.setString(key, value, user.id);
     }
     return this.settings.getBranding();
+  }
+
+  /**
+   * Replace the tenant custom-field schema for clients + products. Each
+   * array is optional; an omitted array preserves the stored side, so a
+   * caller can patch just clients or just products. Returns the full
+   * normalized schema. customFieldSchema is also surfaced read-side via
+   * GET /admin/settings.
+   */
+  @Patch('admin/settings/custom-fields')
+  @Roles('admin')
+  async updateCustomFields(
+    @Body() dto: UpdateCustomFieldsDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    const current = await this.settings.getCustomFieldSchema();
+    return this.settings.setCustomFieldSchema(
+      {
+        clients: dto.clients ?? current.clients,
+        products: dto.products ?? current.products,
+      },
+      user.id,
+    );
   }
 
   @Post('admin/settings/logo')

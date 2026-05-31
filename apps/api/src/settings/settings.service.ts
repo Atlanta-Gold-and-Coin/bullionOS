@@ -9,6 +9,7 @@ import {
   type ValueName,
   type ValueOf,
   type AppSettingsResponse,
+  type CustomFieldSchema,
 } from './settings-registry';
 
 export interface BrandingSettings {
@@ -25,6 +26,13 @@ export interface BrandingSettings {
   logo_url: string | null;
   has_favicon: boolean;
   favicon_url: string | null;
+  /**
+   * Optional theme overrides. Empty string => the FE keeps its built-in
+   * default (so an unset theme reproduces today's exact look).
+   */
+  accent_color: string;
+  sidebar_bg: string;
+  font_family: string;
 }
 
 /**
@@ -70,6 +78,9 @@ export class SettingsService {
       logo_url: slugs.has('logo') ? '/api/v1/public/branding/logo' : null,
       has_favicon: slugs.has('favicon'),
       favicon_url: slugs.has('favicon') ? '/api/v1/public/branding/favicon' : null,
+      accent_color: (all['branding.accent_color'] as string) ?? '',
+      sidebar_bg: (all['branding.sidebar_bg'] as string) ?? '',
+      font_family: (all['branding.font_family'] as string) ?? '',
     };
   }
 
@@ -195,7 +206,85 @@ export class SettingsService {
       branding,
       flags: flags as AppSettingsResponse['flags'],
       values: values as AppSettingsResponse['values'],
+      customFieldSchema: this.normalizeCustomFieldSchema(
+        byKey.get('custom_fields_schema'),
+      ),
     };
+  }
+
+  // ─── Custom-field schema ───────────────────────────────────────────
+  //
+  // Tenant-defined extra fields for clients + products, stored as a
+  // single JSON blob under app_settings key `custom_fields_schema`.
+  // Shape: { clients: FieldDef[], products: FieldDef[] }. When unset (or
+  // malformed) it resolves to { clients: [], products: [] } so the
+  // default behavior is "no custom fields" — byte-identical to today.
+
+  async getCustomFieldSchema(): Promise<CustomFieldSchema> {
+    const row = await this.db
+      .selectFrom('app_settings')
+      .select('value')
+      .where('key', '=', 'custom_fields_schema')
+      .executeTakeFirst();
+    return this.normalizeCustomFieldSchema(row?.value);
+  }
+
+  async setCustomFieldSchema(
+    schema: CustomFieldSchema,
+    actorId: string | null = null,
+  ): Promise<CustomFieldSchema> {
+    const normalized = this.normalizeCustomFieldSchema(schema);
+    await this.db
+      .insertInto('app_settings')
+      .values({
+        key: 'custom_fields_schema',
+        value: sql`${JSON.stringify(normalized)}::jsonb`,
+        updated_by_user_id: actorId,
+      })
+      .onConflict((oc) =>
+        oc.column('key').doUpdateSet({
+          value: sql`${JSON.stringify(normalized)}::jsonb`,
+          updated_by_user_id: actorId,
+          updated_at: new Date(),
+        }),
+      )
+      .execute();
+    return normalized;
+  }
+
+  /** Coerce arbitrary stored/incoming JSON to a well-formed schema. */
+  private normalizeCustomFieldSchema(raw: unknown): CustomFieldSchema {
+    if (!raw || typeof raw !== 'object') return { clients: [], products: [] };
+    const obj = raw as Record<string, unknown>;
+    return {
+      clients: this.normalizeFieldDefs(obj.clients),
+      products: this.normalizeFieldDefs(obj.products),
+    };
+  }
+
+  private normalizeFieldDefs(raw: unknown): CustomFieldSchema['clients'] {
+    if (!Array.isArray(raw)) return [];
+    const allowed = new Set(['text', 'number', 'select', 'date', 'boolean']);
+    const out: CustomFieldSchema['clients'] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const f = item as Record<string, unknown>;
+      const key = typeof f.key === 'string' ? f.key : '';
+      const label = typeof f.label === 'string' ? f.label : '';
+      const type =
+        typeof f.type === 'string' && allowed.has(f.type)
+          ? (f.type as CustomFieldSchema['clients'][number]['type'])
+          : 'text';
+      if (!key) continue;
+      const def: CustomFieldSchema['clients'][number] = { key, label, type };
+      if (type === 'select' && Array.isArray(f.options)) {
+        def.options = f.options.filter(
+          (o): o is string => typeof o === 'string',
+        );
+      }
+      out.push(def);
+    }
+    return out;
   }
 
   async setString(key: string, value: string, actorId: string | null = null): Promise<void> {

@@ -204,9 +204,11 @@
   .bos-theme .text-blue-700          { color: #60a5fa; }
   .bos-theme .text-blue-800          { color: #93c5fd; }
   .bos-theme .text-blue-900          { color: #bfdbfe; }
-  /* Gold-text used as accent on body copy — keep tuned */
-  .bos-theme .text-gold-600          { color: #e7b934; }
-  .bos-theme .text-gold-700          { color: #f3d266; }
+  /* Gold-text used as accent on body copy — keep tuned. Routed
+     through --brand-accent* so a tenant accent override recolors the
+     accent copy too; fallbacks reproduce today's exact gold. */
+  .bos-theme .text-gold-600          { color: var(--brand-accent, #e7b934); }
+  .bos-theme .text-gold-700          { color: var(--brand-accent-strong, #f3d266); }
 
   /* Slate / Violet — used by the metal-group accent pills (Silver
    * = slate, Palladium = violet) on the buy-sheet + in-stock-sheet
@@ -260,6 +262,26 @@
 
 :root {
   color-scheme: light;
+
+  /* ── Tenant theming vars ──────────────────────────────────────────
+   * These hold the DEFAULT (today's hardcoded) values so the stock
+   * deploy is byte-identical. layout.tsx injects an inline <style>
+   * that overrides ONLY the vars a tenant has set (non-empty), so an
+   * un-customized tenant never sees any change.
+   *
+   *   --brand-accent         bright gold accent  (was #e7b934 / gold-400)
+   *   --brand-accent-strong  deep gold accent    (was #f3d266 / gold-300)
+   *   --brand-chrome-bg      sidebar/header bg    (was #0a0d18 / bos.night)
+   *   --brand-font           UI font family       (was the Inter stack)
+   *
+   * Tailwind utilities reference these via var(--brand-*, <currentHex>)
+   * in tailwind.config.ts so the same fallbacks apply to atomic
+   * classes (text-gold-400, bg-bos-night, …).
+   */
+  --brand-accent: #e7b934;
+  --brand-accent-strong: #f3d266;
+  --brand-chrome-bg: #0a0d18;
+  --brand-font: 'Inter', system-ui, sans-serif;
 }
 
 /**
@@ -297,4 +319,9 @@ html, body {
   background: #05060d;
   color: #17171a;
   font-feature-settings: "cv11", "ss01";
+  /* Font family routed through --brand-font (defaults to the Inter
+     stack above). The Tailwind `font-sans` utility resolves to the
+     same var via tailwind.config.ts, so a tenant override here and on
+     atomic classes stays consistent. */
+  font-family: var(--brand-font, 'Inter', system-ui, sans-serif);
 }
